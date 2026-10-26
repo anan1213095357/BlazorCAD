@@ -5,12 +5,16 @@ struct Draw {
  eye:vec4f, color:vec4f, surface:vec4f, live:vec4f,
  cuts:vec4f, flags:vec4f, viewport:vec4f, style:vec4f,
  textureTransform:vec4f, textureOptions:vec4f,
+ capU:vec4f, capV:vec4f,
+ stock:vec4f,
 }
 @group(0) @binding(0) var<uniform> draw:Draw;
 @group(0) @binding(1) var<storage,read> cuts:array<vec4f>;
 @group(0) @binding(2) var<storage,read> rounds:array<vec4f>;
 @group(0) @binding(3) var imageSampler:sampler;
 @group(0) @binding(4) var image:texture_2d<f32>;
+@group(0) @binding(5) var<storage,read> capSegments:array<vec4f>;
+@group(0) @binding(6) var<storage,read> stockNodes:array<vec4f>;
 struct Vertex {
  @location(0) position:vec3f, @location(1) normal:vec3f,
  @location(2) uv:vec2f, @location(3) offset:vec3f,
@@ -28,8 +32,62 @@ struct Varying {
  @location(4) @interpolate(flat) facePoint:vec3f,
  @location(5) uv:vec2f, @location(6) seam:vec2f,
  @location(7) bary:vec3f, @location(8) stroke:vec2f,
+ @location(9) localNormal:vec3f,
 }
 fn safeNormal(v:vec3f)->vec3f {return v*inverseSqrt(max(dot(v,v),1e-20));}
+fn stockBoxHit(p:vec3f,low:vec3f,high:vec3f,best:f32)->bool {
+ let direction=vec3f(.819,.337,.464);
+ let first=(low-p)/direction;let last=(high-p)/direction;
+ let entry=max(max(first.x,first.y),first.z);let exit=min(min(last.x,last.y),last.z);
+ return (exit >= max(0.,entry))&&(entry <= best);
+}
+fn insideStock(point:vec3f,normal:vec3f)->bool {
+ if(draw.stock.w<.5){return true;}
+ let p=point-safeNormal(normal)*draw.stock.z;let direction=vec3f(.819,.337,.464);
+ let total=u32(draw.stock.x);var cursor=0u;var best=1e30;var facing=0.;
+ loop {
+  if(cursor>=total){break;}
+  let low=stockNodes[cursor];let high=stockNodes[cursor+1u];let escapeIndex=u32(low.w+.5);
+  if(draw.stock.w<2.5&&!stockBoxHit(p,low.xyz,high.xyz,best)){cursor=escapeIndex;continue;}
+  let count=u32(high.w+.5);if(count==0u){cursor+=2u;continue;}
+  for(var i=0u;i<count;i++){
+   let stride=select(3u,6u,(draw.stock.w > 1.5));let offset=cursor+2u+i*stride;
+   let a=stockNodes[offset];if(a.w!=draw.stock.y){continue;}
+   var vertexA=a.xyz;var b=stockNodes[offset+1u].xyz;var c=stockNodes[offset+2u].xyz;
+   if(draw.stock.w>1.5){
+    vertexA+=stockNodes[offset+3u].xyz*draw.flags.z;
+    b+=stockNodes[offset+4u].xyz*draw.flags.z;c+=stockNodes[offset+5u].xyz*draw.flags.z;
+   }
+   let edge1=b-vertexA;let edge2=c-vertexA;let crossed=cross(direction,edge2);let determinant=dot(edge1,crossed);
+   if(abs(determinant)<1e-12){continue;}
+   let relative=p-vertexA;let u=dot(relative,crossed)/determinant;
+   if(u< -1e-6||u>1.000001){continue;}
+   let q=cross(relative,edge1);let v=dot(direction,q)/determinant;
+   if(v< -1e-6||u+v>1.000001){continue;}
+   let distance=dot(edge2,q)/determinant;if(distance<0.){continue;}
+   let sign=select(-1.,1.,(determinant < 0.));
+   if(distance<best-draw.stock.z){best=distance;facing=sign;}
+   else if(abs(distance-best)<=draw.stock.z){best=min(best,distance);facing+=sign;}
+  }
+  cursor=escapeIndex;
+ }
+ return facing>0.;
+}
+fn supportedCap(point:vec3f)->bool {
+ let count=u32(draw.style.w);if(count==0u){return true;}
+ let p=vec2f(dot(point,draw.capU.xyz)+draw.capU.w,dot(point,draw.capV.xyz)+draw.capV.w);
+ var inside=false;
+ for(var i=0u;i<count;i++){
+  let segment=capSegments[i];let a=segment.xy;let b=segment.zw;let direction=b-a;
+  let fraction=clamp(dot(p-a,direction)/max(dot(direction,direction),1e-20),0.,1.);
+  let delta=p-(a+direction*fraction);if(dot(delta,delta)<=1e-10){return true;}
+  if((a.y>p.y)!=(b.y>p.y)){
+   let crossing=a.x+(p.y-a.y)*(b.x-a.x)/(b.y-a.y);
+   if(p.x<crossing){inside=!inside;}
+  }
+ }
+ return inside;
+}
 @vertex fn vertexMain(v:Vertex)->Varying {
  var out:Varying;
  let local=v.position+v.offset*draw.live.y+v.motion*draw.live.z;
@@ -53,6 +111,7 @@ fn safeNormal(v:vec3f)->vec3f {return v*inverseSqrt(max(dot(v,v),1e-20));}
  out.position=vec4f(clip.xy,(clip.z+clip.w)*.5,clip.w);
  out.world=world.xyz;out.local=local;
  out.normal=safeNormal((draw.normalMatrix*vec4f(v.normal,0)).xyz);
+ out.localNormal=v.normal;
  out.faceNormal=v.faceNormal;out.facePoint=v.facePoint;
  out.uv=v.uv+v.uvMotion*draw.live.z;out.seam=v.seam;out.bary=v.bary;
  return out;
@@ -75,13 +134,28 @@ fn roundOutside(row:u32,start:bool,q:vec3f,along:vec4f,r:f32,e:f32,fallback:bool
    if(height>roundRead(index,middle+2u).x){low=middle;}else{high=middle;}}
   let a=roundRead(index,low+2u);let b=roundRead(index,high+2u);
   let fraction=clamp((height-a.x)/max(1e-12,b.x-a.x),0.,1.);boundary=mix(a.y,b.y,fraction);
-  if(abs(height)<e/r){let width=mix(a.z,b.z,fraction);if(abs(width)>1e-8){boundary*=dot(local,cross(seamHeader.xyz,along.xyz))/width;}}
+  // The two side planes define an inclined source spine. Connect its point
+  // at this common depth to the shared round seam, rather than assuming the
+  // source corner is vertically below its top position.
+  let width=mix(a.z,b.z,fraction);
+  let spineShift=roundRead(index,1u).w*height;let spineWidth=first.w*height;
+  let span=width-spineWidth;let shift=boundary-spineShift;
+  let across=dot(local,cross(seamHeader.xyz,along.xyz))-spineWidth;
+  // Use an oriented 2D line, without division by the vanishing span.
+  // Its limiting half-plane is still valid at a round tangency; the old
+  // bisector fallback is a different plane and opens the end of the seam.
+  let aSpan=a.z-first.w*a.x;let bSpan=b.z-first.w*b.x;
+  let reference=select(bSpan,aSpan,(abs(aSpan) >= abs(bSpan)));
+  let orientation=select(1.,-1.,(reference < 0.));
+  let distance=((t-spineShift)*span-shift*across)*orientation;
+  let tolerance=e/r*length(vec2f(span,shift));
+  return select((distance > tolerance),(distance < -tolerance),start);
  }
- return select(t>boundary+e/r,t<boundary-e/r,start);
+ return select((t > boundary+e/r),(t < boundary-e/r),start);
 }
 fn glmod(x:f32,y:f32)->f32 {return x-y*floor(x/y);}
 fn removed(point:vec3f,row:u32,faceNormal:vec3f,facePoint:vec3f)->bool {
- let options=cut(row,9u);let radius=select(options.x,draw.live.x,options.x<0.);
+ let options=cut(row,9u);let radius=select(options.x,draw.live.x,(options.x < 0.));
  let bevel=options.y;let ratio=options.z;
  let origin=cut(row,0u);let along=cut(row,1u);let du=cut(row,2u);let dv=cut(row,3u);
  let center=cut(row,4u);let cap=cut(row,5u);let circle=cut(row,6u);let q=point-origin.xyz;
@@ -110,8 +184,10 @@ fn removed(point:vec3f,row:u32,faceNormal:vec3f,facePoint:vec3f)->bool {
  let t=dot(q,along.xyz);let endTolerance=max(max(.002,along.w*.000002),epsilon);
  var startPlane=cut(row,10u);var endPlane=cut(row,11u);
  startPlane.w+=cut(row,7u).w*radius;endPlane.w+=cut(row,8u).w*radius;
- var outsideStart=select(t< -endTolerance,dot(point,startPlane.xyz)-startPlane.w>endTolerance,length(startPlane.xyz)>.5);
- var outsideEnd=select(t>along.w+endTolerance,dot(point,endPlane.xyz)-endPlane.w>endTolerance,length(endPlane.xyz)>.5);
+ // Relational function arguments must be grouped: an ungrouped a < b,
+ // followed by > can otherwise be parsed as a template argument list.
+ var outsideStart=select((t < -endTolerance),(dot(point,startPlane.xyz)-startPlane.w > endTolerance),(length(startPlane.xyz) > .5));
+ var outsideEnd=select((t > along.w+endTolerance),(dot(point,endPlane.xyz)-endPlane.w > endTolerance),(length(endPlane.xyz) > .5));
  let bits=u32(dv.w);
  if(bits>0u){
   let startLimit=cut(row,12u);let endLimit=cut(row,13u);
@@ -130,7 +206,7 @@ fn removed(point:vec3f,row:u32,faceNormal:vec3f,facePoint:vec3f)->bool {
  let radial=q-along.xyz*t-center.xyz*radius;
  return dot(radial,radial)>radius*radius-max(.000001,radius*radius*.000001);
 }
-fn srgb(color:vec3f)->vec3f {return select(color*12.92,1.055*pow(max(color,vec3f(0)),vec3f(1./2.4))-.055,color>vec3f(.0031308));}
+fn srgb(color:vec3f)->vec3f {return select(color*12.92,1.055*pow(max(color,vec3f(0)),vec3f(1./2.4))-.055,(color > vec3f(.0031308)));}
 fn tone(color:vec3f)->vec3f {let x=max(color,vec3f(0))*.9;return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),vec3f(0),vec3f(1));}
 fn textureUv(p:vec2f)->vec2f {
  let c=draw.textureTransform.x;let s=draw.textureTransform.y;
@@ -150,19 +226,32 @@ fn light(n:vec3f,v:vec3f,l:vec3f,base:vec3f,rough:f32,metal:f32)->vec3f {
  let geometric=safeNormal(cross(dpdx(in.local),dpdy(in.local)));
  let profileWidth=max(fwidth(in.uv.y),.000001);let seamWidth=max(fwidth(in.seam),vec2f(.000001));
  let baryWidth=max(fwidth(in.bary),vec3f(.000001));
+ // Reject overlay interiors before any per-fragment geometry traversal.
+ // Debug overlays contain filled triangles; only their thin borders survive.
+ if(draw.surface.w>.5){
+  let edge=min(min(in.bary.x/baryWidth.x,in.bary.y/baryWidth.y),in.bary.z/baryWidth.z);
+  if(edge>1.2){discard;}
+ }
+ if(draw.flags.w>1.5&&length(in.stroke)>1.){discard;}
+ if(draw.flags.w>.5&&draw.flags.w<1.5&&draw.viewport.w>.5&&glmod(in.stroke.y,13.)>8.){discard;}
+ if(draw.flags.y<.5&&!supportedCap(in.local)){discard;}
  let count=u32(draw.cuts.x);
- let faceNormal=select(in.faceNormal,geometric,draw.live.w>.5);
- let facePoint=select(in.facePoint,in.local,draw.live.w>.5);
+ let faceNormal=select(in.faceNormal,geometric,(draw.live.w > .5));
+ let facePoint=select(in.facePoint,in.local,(draw.live.w > .5));
  for(var row=0u;row<count;row++){
   let index=f32(row);if((index>=draw.cuts.y&&index<draw.cuts.z)||index==draw.cuts.w||index==draw.flags.x){continue;}
-  if(any(in.local<cut(row,7u).xyz)||any(in.local>cut(row,8u).xyz)){continue;}
+  if(any((in.local < cut(row,7u).xyz))||any((in.local > cut(row,8u).xyz))){continue;}
   if(removed(in.local,row,faceNormal,facePoint)){discard;}
  }
+ // Stock membership is still required, but only for fragments surviving
+ // the inexpensive feature/cap/overlay cuts. These predicates commute.
+ let stockInside=insideStock(in.local,in.localNormal);
+ if(draw.flags.y>.5){if(draw.stock.w>.5&&stockInside){discard;}}
+ else if(!stockInside){discard;}
  var base=draw.color.rgb;var opacity=draw.color.a;
  if(draw.flags.w>1.5){
-  let distance=length(in.stroke);if(distance>1.){discard;}opacity*=1.-smoothstep(.85,1.,distance);
+  let distance=length(in.stroke);opacity*=1.-smoothstep(.85,1.,distance);
  }else if(draw.flags.w>.5){
-  if(draw.viewport.w>.5&&glmod(in.stroke.y,13.)>8.){discard;}
   base=mix(vec3f(.035,.075,.11),base,1.-smoothstep(.48,.7,abs(in.stroke.x)));
   opacity*=1.-smoothstep(.86,1.,abs(in.stroke.x));
  }
@@ -190,8 +279,8 @@ fn light(n:vec3f,v:vec3f,l:vec3f,base:vec3f,rough:f32,metal:f32)->vec3f {
   let seamBorder=vec2f(1)-smoothstep(seamWidth*.35,seamWidth*1.35,in.seam);
   color=mix(color,vec3f(.075,.095,.115),max(border,max(seamBorder.x,seamBorder.y))*.85);
  }
- if(draw.surface.w>.5){let edge=min(min(in.bary.x/baryWidth.x,in.bary.y/baryWidth.y),in.bary.z/baryWidth.z);if(edge>1.2){discard;}color=draw.color.rgb;}
+ if(draw.surface.w>.5){color=draw.color.rgb;}
  if(draw.style.y>.5){return vec4f(color,opacity);}
- return vec4f(srgb(select(color,tone(color),draw.surface.z>.5)),opacity);
+ return vec4f(srgb(select(color,tone(color),(draw.surface.z > .5))),opacity);
 }
 `;

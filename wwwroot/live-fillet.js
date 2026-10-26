@@ -6,6 +6,7 @@ import {circleOf,arcOf} from './curved-boundary.js';
 import {edgeEndCap} from './edge-end-cap.js';
 import {railContact,stitchBandRails} from './edge-rail-stitch.js';
 import {rimBevelProfiles} from './rim-bevel-profile.js';
+import {stockClipData} from './solid-picking.js';
 // Clip positions use centroid interpolation in BOTH shader stages. With MSAA,
 // ordinary varyings can be evaluated outside a partially covered triangle; the
 // extrapolated point then escapes the cut domain and leaves dotted old edges.
@@ -18,14 +19,16 @@ const v=()=>new CAD.Vector3();
 export class LiveFillet {
     constructor(mesh,group,edges,value,host,feature={},polygons=[]){
         this.bevel=feature.edgeTreatment==='chamfer';this.ratio=Math.tan((feature.chamferAngle??45)*Math.PI/180);
-        this.mesh=mesh;this.group=group;this.original=mesh.material;this.patches=[];this.materials=[];this.originalDepth=mesh.customDepthMaterial;this.radius={value};this.records=[];
+        this.mesh=mesh;this.group=group;this.original=mesh.material;this.patches=[];this.materials=[];this.capTextures=new Set();this.originalDepth=mesh.customDepthMaterial;this.radius={value};this.records=[];
         this.max=Infinity;this.boundsRadius=Math.max(1,value)*2;this.recordBounds=[];
+        this.stockMotion=mesh.userData.edgeMotionGpu;this.stockClip=stockClipData(mesh);
+        if(this.stockClip)this.stockTexture=new CAD.DataTexture(this.stockClip.data,this.stockClip.count,1,CAD.RGBAFormat,CAD.FloatType);
         if(!Number.isFinite(value)||value<.1)throw new Error('请输入不小于 0.1 mm 的有限尺寸。');
         edges=rimBevelProfiles(edges,feature);
         const strips=[];
         for(const edge of edges){
             const settings=edge.visualFeature??feature,bevel=settings.edgeTreatment==='chamfer',ratio=edge.bevelProfile?.ratio??Math.tan((settings.chamferAngle??45)*Math.PI/180);
-            this.current={bevel,ratio,scale:edge.bevelProfile?.scale??1,coherentRim:edge.bevelProfile?.coherentRim??false,radius:edge.visualFeature?settings.depth:-1,treatment:settings.id,owner:edge.faceA?.featureId,curve:edge.kind==='curve'};
+            this.current={concave:!!edge.concave,bevel,ratio,scale:edge.bevelProfile?.scale??1,coherentRim:edge.bevelProfile?.coherentRim??false,radius:edge.visualFeature?settings.depth:-1,treatment:settings.id,owner:edge.faceA?.featureId,curve:edge.kind==='curve'};
             const axis=edge.b.clone().sub(edge.a).normalize();
             const [startFace,endFace]=edgeEndPlanes(edge,polygons);
             this.current.start=startFace?.normal??null;this.current.end=endFace?.normal??null;this.current.a=edge.a;this.current.b=edge.b;
@@ -48,7 +51,7 @@ export class LiveFillet {
         joinEdgeBands(strips,this.records,section);
         if(!this.records.length)throw new Error('请选择有效的圆角边界。');
         for(const strip of strips){
-            strip.sections=strip.frames.map(frame=>section(frame.normalA,frame.normalB,strip.settings.bevel,strip.settings.ratio,strip.settings.scale));
+            strip.sections=strip.frames.map(frame=>section(frame.normalA,frame.normalB,strip.settings.bevel,strip.settings.ratio,strip.settings.scale,strip.settings.concave));
             const axis=strip.settings.b.clone().sub(strip.settings.a).normalize();
             strip.samples=bandSamples(strip.sections[0],axis,strip.settings);
             let extent=0;
@@ -68,7 +71,9 @@ export class LiveFillet {
         }
         const textureData=new Float32Array(this.records.length*56);this.records.forEach((record,i)=>textureData.set(record,i*56));this.texture=new CAD.DataTexture(textureData,14,this.records.length,CAD.RGBAFormat,CAD.FloatType);this.texture.minFilter=CAD.NearestFilter;this.texture.magFilter=CAD.NearestFilter;this.texture.needsUpdate=true;
         const roundData=new Float32Array(68*this.records.length*2*4);
-        this.records.forEach((record,index)=>{for(const [side,end] of [['roundStart',0],['roundEnd',1]]){const joint=record[side];if(!joint)continue;const offset=(index*2+end)*68*4;roundData.set([...joint.common.toArray(),joint.knots.length],offset);roundData.set(joint.wall.toArray(),offset+4);joint.knots.forEach((k,i)=>roundData.set([k.height,k.shift,k.width,0],offset+(i+2)*4));}});
+        // Spare W components carry the actual source-spine shifts, keeping
+        // the same table size and one-uniform radius updates while dragging.
+        this.records.forEach((record,index)=>{for(const [side,end] of [['roundStart',0],['roundEnd',1]]){const joint=record[side];if(!joint)continue;const offset=(index*2+end)*68*4;roundData.set([...joint.common.toArray(),joint.knots.length],offset);roundData.set([...joint.wall.toArray(),joint.spineShift],offset+4);joint.knots.forEach((k,i)=>roundData.set([k.height,k.shift,k.width,i===0?joint.spineWidth:0],offset+(i+2)*4));}});
         this.roundTexture=new CAD.DataTexture(roundData,68,this.records.length*2,CAD.RGBAFormat,CAD.FloatType);this.roundTexture.minFilter=this.roundTexture.magFilter=CAD.NearestFilter;this.roundTexture.needsUpdate=true;
         // Cached with the stock geometry, not rebuilt on radius or camera moves.
         // Use geometric triangle normals, never smoothed shading normals, for
@@ -106,10 +111,11 @@ export class LiveFillet {
                 if(distance<1e-12)break;
             }
             const joined=[...(strip.roundPeers??[])].map(peer=>peer.index);
-            const patch=new CAD.Mesh(geometry,this.material(original[materialIndex]??original[0],strip.skipStart,true,strip.skipEnd,strip.settings.radius,false,joined));patch.receiveShadow=true;patch.castShadow=true;patch.layers.enable(1);
+            const patchMaterial=this.material(original[materialIndex]??original[0],strip.skipStart,true,strip.skipEnd,strip.settings.radius,false,joined);patchMaterial.cadStockIndex=materialIndex;patchMaterial.cadLive.concave=strip.settings.concave;
+            const patch=new CAD.Mesh(geometry,patchMaterial);patch.receiveShadow=true;patch.castShadow=true;patch.layers.enable(1);
             const depthSource=new CAD.MeshDepthMaterial({depthPacking:CAD.RGBADepthPacking});patch.customDepthMaterial=this.material(depthSource,strip.skipStart,true,strip.skipEnd,strip.settings.radius,false,joined);depthSource.dispose();patch.frustumCulled=false;patch.raycast=()=>{};patch.userData.sharedMaterial=true;patch.renderOrder=1;group.add(patch);this.patches.push(patch);
             for(const side of ['start','end']){
-                const capGeometry=edgeEndCap(strip,side);if(!capGeometry)continue;
+                const capGeometry=edgeEndCap(strip,side,polygons);if(!capGeometry)continue;
                 const capNormal=strip.settings[side+'Closure'],capPoint=strip.frames[side==='start'?0:strip.frames.length-1].point;
                 let capIndex=materialIndex,capDistance=Infinity;
                 for(const item of groups)for(let vertex=item.start;vertex<item.start+item.count;vertex+=3){
@@ -120,6 +126,9 @@ export class LiveFillet {
                     if(squared<capDistance){capDistance=squared;capIndex=item.materialIndex;}
                 }
                 const capMaterial=this.material(original[capIndex]??original[0],strip.skipStart,true,strip.skipEnd,strip.settings.radius,true,joined);
+                capMaterial.cadStockIndex=capIndex;capMaterial.cadLive.concave=strip.settings.concave;
+                const capSection=capGeometry.userData.capSection,capTexture=new CAD.DataTexture(capSection.data,capSection.count,1,CAD.RGBAFormat,CAD.FloatType);
+                this.capTextures.add(capTexture);capMaterial.cadCapSection={...capSection,texture:capTexture};
                 const cap=new CAD.Mesh(capGeometry,capMaterial);cap.customDepthMaterial=patch.customDepthMaterial;
                 cap.receiveShadow=true;cap.castShadow=true;cap.layers.enable(1);cap.frustumCulled=false;cap.raycast=()=>{};
                 cap.userData.sharedMaterial=true;cap.renderOrder=1;group.add(cap);this.patches.push(cap);
@@ -130,12 +139,12 @@ export class LiveFillet {
         for(const overlay of group.children.filter(object=>object.userData.edgeClipOverlay)){this.overlays.push([overlay,overlay.material]);overlay.material=this.material(overlay.material,-1,false);}
         if(feature.visualPersistent){this.set(value);return;}
         const labelStrip=strips.find(strip=>strip.settings.radius<0)??strips[0];
-        const anchor=labelStrip.frames[Math.floor(labelStrip.frames.length/2)],cross=section(anchor.normalA,anchor.normalB,labelStrip.settings.bevel,labelStrip.settings.ratio,labelStrip.settings.scale);this.anchor=anchor.point.clone();this.anchorOffset=cross.offsets[16];
+        const anchor=labelStrip.frames[Math.floor(labelStrip.frames.length/2)],cross=section(anchor.normalA,anchor.normalB,labelStrip.settings.bevel,labelStrip.settings.ratio,labelStrip.settings.scale,labelStrip.settings.concave);this.anchor=anchor.point.clone();this.anchorOffset=cross.offsets[16];
         this.host=host;this.label=document.createElement('div');this.label.className='live-fillet-radius';this.label.style.cssText='position:absolute;pointer-events:none;z-index:12;padding:6px 10px;border:1px solid #d9bd82;border-radius:5px;background:#172330e8;color:#f0d89e;font:600 13px Segoe UI;font-variant-numeric:tabular-nums;white-space:nowrap;';host.appendChild(this.label);
         this.set(value);
     }
     addRecord(a,b,n1,n2,circle=null,points=[a,b]){
-        const data=new Float32Array(56),axis=b.clone().sub(a),length=axis.length();axis.normalize();const s=section(n1,n2,this.current.bevel,this.current.ratio,this.current.scale),boundScale=1+Math.max(1,...s.offsets.map(offset=>offset.length())),box=new CAD.Box3().setFromPoints(points).expandByScalar((this.current.radius<0?this.boundsRadius:this.current.radius)*boundScale);
+        const data=new Float32Array(56),axis=b.clone().sub(a),length=axis.length();axis.normalize();const s=section(n1,n2,this.current.bevel,this.current.ratio,this.current.scale,this.current.concave),boundScale=1+Math.max(1,...s.offsets.map(offset=>offset.length())),box=new CAD.Box3().setFromPoints(points).expandByScalar((this.current.radius<0?this.boundsRadius:this.current.radius)*boundScale);
         const write=(col,p,w=0)=>data.set([p.x,p.y,p.z,w],col*4);
         // Use the uncertainty of this actual rail, not a radius-only epsilon.
         // Circle fitting accepts slightly imperfect/BSP-split rails; their
@@ -166,5 +175,5 @@ export class LiveFillet {
         this.radius.value=value;this.value=value;return true;
     }
     frame(camera){if(!this.label)return;const point=this.anchor.clone().addScaledVector(this.anchorOffset,this.value).project(camera);this.label.hidden=point.z< -1||point.z>1;this.label.style.left=Math.max(8,Math.min(this.host.clientWidth-130,(point.x+1)*this.host.clientWidth/2+14))+'px';this.label.style.top=Math.max(8,Math.min(this.host.clientHeight-40,(1-point.y)*this.host.clientHeight/2-18))+'px';this.label.textContent=(this.bevel?'D ':'R ')+Number(this.value.toFixed(2))+' mm';}
-    dispose(){this.label?.remove();this.mesh.material=this.original;this.mesh.customDepthMaterial=this.originalDepth;for(const [overlay,material] of this.overlays??[])overlay.material=material;for(const patch of this.patches){patch.removeFromParent();patch.geometry.dispose();}for(const material of this.materials)material.dispose();this.texture.dispose();this.roundTexture?.dispose();this.patches=[];}
+    dispose(){this.label?.remove();this.mesh.material=this.original;this.mesh.customDepthMaterial=this.originalDepth;for(const [overlay,material] of this.overlays??[])overlay.material=material;for(const patch of this.patches){patch.removeFromParent();patch.geometry.dispose();}for(const material of this.materials)material.dispose();for(const texture of this.capTextures)texture.dispose();this.capTextures.clear();this.stockTexture?.dispose();this.texture.dispose();this.roundTexture?.dispose();this.patches=[];}
 }

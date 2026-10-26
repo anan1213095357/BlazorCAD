@@ -2,7 +2,7 @@ import * as CAD from './engine/core.js';
 
 function bevelPlane(edge,feature,origin){
     const tangent=edge.b.clone().sub(edge.a).normalize(),a=tangent.clone().cross(edge.normalA).normalize(),b=tangent.clone().cross(edge.normalB).normalize();
-    if(a.dot(edge.normalB)>0)a.negate();if(b.dot(edge.normalA)>0)b.negate();
+    if(a.dot(edge.normalB)>0)a.negate();if(b.dot(edge.normalA)>0)b.negate();if(edge.concave){a.negate();b.negate();}
     const p=edge.a.clone().sub(origin).addScaledVector(a,feature.depth*(edge.topologyProfile?.first??1)),q=edge.a.clone().sub(origin).addScaledVector(b,feature.depth*(edge.topologyProfile?.second??Math.tan((feature.chamferAngle??45)*Math.PI/180))),n=q.clone().sub(p).cross(tangent).normalize();
     return {n,w:n.dot(p)};
 }

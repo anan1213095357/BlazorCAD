@@ -1,13 +1,16 @@
 import * as CAD from './engine/core.js';
 import {bandEnd,sectionSample} from './edge-band-layout.js';
+import {capStockSection} from './cap-stock-section.js';
 
 // Fusing a boss to a base removes the base's internal top polygons. Bevelling
 // the boss exposes a part of that old internal face; clipping alone cannot
 // recover it. Recreate only the removed wedge on its actual terminating plane.
-export function edgeEndCap(strip, side) {
+export function edgeEndCap(strip, side, polygons) {
     const normal=strip.settings[side+'Closure'];
     if(!normal||strip.closed||strip.settings.curve||strip.settings[side+'Joint']||strip.settings[side+'RoundJoint'])return null;
     const index=side==='start'?0:strip.frames.length-1,frame=strip.frames[index];
+    const support=capStockSection(polygons,frame.point,normal);
+    if(!support)return null;
     const cross=strip.sections[index],axis=strip.settings.b.clone().sub(strip.settings.a).normalize();
     const offsets=[new CAD.Vector3(),...strip.samples.map(sample=>bandEnd(sectionSample(cross,sample).offset,axis,strip.settings,side).offset)];
     const position=[],displacement=[],normals=[],tangents=[],uv=[],seams=[],indices=[];
@@ -30,5 +33,5 @@ export function edgeEndCap(strip, side) {
     geometry.setAttribute('tangent',new CAD.Float32BufferAttribute(tangents,4));
     geometry.setAttribute('uv',new CAD.Float32BufferAttribute(uv,2));
     geometry.setAttribute('liveSeamCoordinate',new CAD.Float32BufferAttribute(seams,2));
-    geometry.setIndex(indices);return geometry;
+    geometry.setIndex(indices);geometry.userData.capSection=support;return geometry;
 }

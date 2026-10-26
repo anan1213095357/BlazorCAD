@@ -26,7 +26,22 @@ export async function exportMeshOperations(stock,operations,onProgress=()=>{}){
         for(const [index,operation] of operations.entries()){
             onProgress(`网格实体运算：${index+1} / ${operations.length}`);
             const tools=operation.tools.map((polygons,i)=>{
-                let value=inputMesh(module,polygons,`第 ${index+1} 组第 ${i+1} 个切削体`);allocated.push(value);
+                let value;
+                if(polygons.exportSweepCells){
+                    const cells=[];
+                    for(const points of polygons.exportSweepCells){
+                        const cell=module.Manifold.hull(points.map(point=>point.toArray()));allocated.push(cell);
+                        const status=cell.status();if(status!=='NoError')throw new Error(`曲线倒角分段体生成失败（${status}）。`);
+                        // A station exactly on the collapse axis has zero volume.
+                        // It contributes no cutting region; its neighbours do.
+                        if(!cell.isEmpty())cells.push(cell);
+                    }
+                    if(!cells.length)throw new Error('曲线倒角未生成有效切削体积。');
+                    value=cells.length===1?cells[0]:module.Manifold.union(cells);
+                    if(cells.length!==1)allocated.push(value);
+                }else{
+                    value=inputMesh(module,polygons,`第 ${index+1} 组第 ${i+1} 个切削体`);allocated.push(value);
+                }
                 for(const plane of polygons.endDomains??[]){value=value.trimByPlane(plane.normal.clone().negate().toArray(),-plane.w);allocated.push(value);}
                 return value;
             });
@@ -36,8 +51,52 @@ export async function exportMeshOperations(stock,operations,onProgress=()=>{}){
             const next=operation.subtract?module.Manifold.difference([result,operand]):module.Manifold.union([result,operand]);allocated.push(next);result=next;
         }
         const status=result.status();if(status!=='NoError')throw new Error(`网格布尔失败（${status}）。`);
-        const mesh=result.getMesh(),vertices=[];
-        for(let i=0;i<mesh.vertProperties.length;i+=mesh.numProp)vertices.push(new CAD.Vector3(mesh.vertProperties[i],mesh.vertProperties[i+1],mesh.vertProperties[i+2]));
+        // STL stores Float32 positions and has no merge-vertex metadata.
+        // Remove only detail below that representation's coordinate precision
+        // while the manifold kernel still owns the connected topology.
+        onProgress('正在按 STL 坐标精度整理实体拓扑…');
+        const bounds=result.boundingBox(),magnitude=Math.max(...bounds.min.map(Math.abs),...bounds.max.map(Math.abs));
+        const spacing=magnitude>0?Math.max(2**-149,2**(Math.floor(Math.log2(magnitude))-23)):2**-149;
+        // Quantize BEFORE simplifying: getMesh() converts internal doubles
+        // to Float32. Simplifying doubles first leaves edges which only become
+        // coincident during that final conversion, too late for kernel repair.
+        // Batch mapping crosses the WASM boundary once, not once per vertex.
+        // History/face IDs are useful while editing, but may protect short
+        // seams from simplification. STL has no such provenance: rebuild the
+        // face grouping before repairing its Float32-sized vertex clusters.
+        const original=result.asOriginal();allocated.push(original);
+        const quantized=original.warpBatch(coordinates=>{
+            for(let i=0;i<coordinates.length;i++)coordinates[i]=Math.fround(coordinates[i]);
+        });allocated.push(quantized);
+        const quantizedStatus=quantized.status();
+        if(quantizedStatus!=='NoError')throw new Error(`STL 坐标转换失败（${quantizedStatus}）。`);
+        const simplified=quantized.simplify(spacing*2);allocated.push(simplified);
+        const simplifiedStatus=simplified.status();
+        if(simplifiedStatus!=='NoError')throw new Error(`STL 精度整理失败（${simplifiedStatus}）。`);
+        const mesh=simplified.getMesh(),vertices=[],parents=new Uint32Array(mesh.numVert);
+        for(let i=0;i<parents.length;i++)parents[i]=i;
+        const root=index=>{let current=index;while(parents[current]!==current)current=parents[current];while(parents[index]!==index){const next=parents[index];parents[index]=current;index=next;}return current;};
+        // Property/face seams may duplicate vertices. Their authoritative merge
+        // pairs define one topological vertex; coordinate hashing alone loses it.
+        for(let i=0;i<(mesh.mergeFromVert?.length??0);i++){
+            const from=mesh.mergeFromVert[i],to=mesh.mergeToVert[i];
+            if(from>=parents.length||to>=parents.length)throw new Error('导出实体包含无效的缝合顶点引用。');
+            const a=root(from),b=root(to);if(a!==b)parents[a]=b;
+        }
+        const roots=Array.from(parents,(_,i)=>root(i)),topology=new Map();
+        for(let i=0;i<mesh.triVerts.length;i+=3)for(let side=0;side<3;side++){
+            const a=roots[mesh.triVerts[i+side]],b=roots[mesh.triVerts[i+(side+1)%3]];
+            if(a===b)throw new Error('导出内核返回退化拓扑边。');
+            const key=a<b?a+'/'+b:b+'/'+a,edge=topology.get(key)??{count:0,balance:0};
+            edge.count++;edge.balance+=a<b?1:-1;topology.set(key,edge);
+        }
+        if([...topology.values()].some(edge=>edge.count!==2||edge.balance!==0))throw new Error('导出内核的索引拓扑未闭合，不能用坐标调整代替修复。');
+        // Preserve the kernel's positions and merge identities. Never move
+        // distinct surface fans apart merely to satisfy the STL edge check.
+        for(let i=0;i<parents.length;i++){
+            const offset=roots[i]*mesh.numProp;
+            vertices.push(new CAD.Vector3(Math.fround(mesh.vertProperties[offset]),Math.fround(mesh.vertProperties[offset+1]),Math.fround(mesh.vertProperties[offset+2])));
+        }
         const polygons=[];
         for(let i=0;i<mesh.triVerts.length;i+=3)polygons.push({vertices:[vertices[mesh.triVerts[i]],vertices[mesh.triVerts[i+1]],vertices[mesh.triVerts[i+2]]]});
         return polygons;

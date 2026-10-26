@@ -42,6 +42,7 @@ export const RGBAFormat='rgba',FloatType='float32',NearestFilter='nearest',Linea
 const linear=x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4;
 export class Color {
  constructor(value=0xffffff){this.set(value);}
+ setHex(value){return this.set(value);}
  set(value){if(value&&typeof value==='object'){this.r=value.r;this.g=value.g;this.b=value.b;return this;}if(typeof value==='string'){const text=value.replace('#','');value=parseInt(text.length===3?text.split('').map(c=>c+c).join(''):text,16);}this.r=linear(((value>>16)&255)/255);this.g=linear(((value>>8)&255)/255);this.b=linear((value&255)/255);return this;}
  copy(value){return this.set(value);}clone(){return new Color(this);}setRGB(r,g,b){this.r=r;this.g=g;this.b=b;return this;}
 }

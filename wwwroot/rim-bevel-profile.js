@@ -6,7 +6,7 @@ export function rimBevelProfiles(edges,feature){
     const result=edges.map(edge=>({...edge})),groups=[];
     for(let index=0;index<result.length;index++){
         const edge=result[index],settings=edge.visualFeature??feature;
-        if(edge.kind==='curve'||settings.edgeTreatment!=='chamfer')continue;
+        if(edge.concave||edge.kind==='curve'||settings.edgeTreatment!=='chamfer')continue;
         for(const [side,normal] of [[0,edge.normalA],[1,edge.normalB]]){
             const w=normal.dot(edge.a),owner=settings.id;
             let group=groups.find(item=>item.owner===owner&&item.normal.dot(normal)>1-1e-7&&Math.abs(item.w-w)<1e-4);

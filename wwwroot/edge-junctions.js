@@ -26,11 +26,11 @@ export function joinEdgeBands(strips,records,section){
             // it must not remitre them retroactively when a draft is confirmed.
             // The saved edge catalogue is built with this same per-feature scope.
             if(sa.treatment!==sb.treatment)continue;
-            if(sa.bevel!==sb.bevel||(!sa.bevel&&Math.abs(sa.ratio-sb.ratio)>1e-8)||Math.abs(sa.radius-sb.radius)>1e-8)continue;
+            if(!!sa.concave!==!!sb.concave||sa.bevel!==sb.bevel||(!sa.bevel&&Math.abs(sa.ratio-sb.ratio)>1e-8)||Math.abs(sa.radius-sb.radius)>1e-8)continue;
             const af=a.strip.frames[a.index],bf=b.strip.frames[b.index],an=[af.normalA,af.normalB],bn=[bf.normalA,bf.normalB];
             const awayA=a.strip.frames[1-a.index].point.clone().sub(a.point).normalize(),awayB=b.strip.frames[1-b.index].point.clone().sub(b.point).normalize();
             if(Math.abs(awayA.dot(awayB))>.9995)continue;
-            const crossA=section(af.normalA,af.normalB,sa.bevel,sa.ratio,sa.scale),crossB=section(bf.normalA,bf.normalB,sb.bevel,sb.ratio,sb.scale);
+            const crossA=section(af.normalA,af.normalB,sa.bevel,sa.ratio,sa.scale,sa.concave),crossB=section(bf.normalA,bf.normalB,sb.bevel,sb.ratio,sb.scale,sb.concave);
             for(let i=0;i<2;i++)for(let j=0;j<2;j++){
                 if(an[i].dot(bn[j])<1-1e-6)continue;
                 let plane=awayB.clone().sub(awayA).normalize();
@@ -80,7 +80,7 @@ export function joinEdgeBands(strips,records,section){
                 // A round seam is a depth-dependent boundary, not the union of
                 // two half-spaces: that union cuts rectangular holes in stock.
                 const axis=entry.strip.frames[1].point.clone().sub(entry.strip.frames[0].point).normalize(),transverse=data.common.clone().cross(axis);
-                row[side==='start'?'roundStart':'roundEnd']={common:data.common,wall:data.wall,knots:data.knots.map((k,index)=>{
+                row[side==='start'?'roundStart':'roundEnd']={common:data.common,wall:data.wall,spineShift:data.spine.dot(axis),spineWidth:data.spine.dot(transverse),knots:data.knots.map((k,index)=>{
                     const sample=data.samples[index],low=Math.floor(sample),high=Math.min(32,low+1),offset=own.offsets[low].clone().lerp(own.offsets[high],sample-low);
                     return {height:k.height,shift:k.point.dot(axis),width:offset.dot(transverse)};
                 })};

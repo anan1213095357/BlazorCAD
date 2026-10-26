@@ -1,7 +1,7 @@
 import {cadShader} from './cad-shader.js';
 
 const fields=[['position',3],['normal',3],['uv',2],['liveOffset',3],['cadEdgeMotion',3],['liveSeamCoordinate',2],['liveFaceNormalAttribute',3],['facePoint',3],['segmentStart',3],['segmentEnd',3],['corner',2],['bary',3],['cadEdgeUvMotion',2]];
-const stride=140,uniformBytes=352;
+const stride=140,uniformBytes=400;
 function multiply(a,b){
  const out=new Float32Array(16);
  for(let col=0;col<4;col++)for(let row=0;row<4;row++)for(let k=0;k<4;k++)out[col*4+row]+=a[k*4+row]*b[col*4+k];
@@ -21,7 +21,13 @@ export class CadWebGPURenderer {
   const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
   if(!adapter)throw new Error('无法获取 WebGPU 显卡适配器。');
   const device=await adapter.requestDevice();
-  try{const result=new CadWebGPURenderer(device,options);await result.initialize();return result;}catch(error){device.destroy();throw error;}
+  let result;
+  try{result=new CadWebGPURenderer(device,options);await result.initialize();return result;}
+  catch(error){
+   // Mark the owner closed BEFORE destroying the device, including when
+   // shader/pipeline initialization failed. Preserve the original exception.
+   try{if(result)result.dispose();else device.destroy();}finally{throw error;}
+  }
  }
  constructor(device,{onError=()=>{},onReady=()=>{}}={}){
   this.device=device;this.onError=onError;this.onReady=onReady;this.isNativeWebGPU=true;
@@ -30,10 +36,15 @@ export class CadWebGPURenderer {
   this.format=navigator.gpu.getPreferredCanvasFormat();this.pixelRatio=1;this.width=1;this.height=1;this.disposed=false;
   this.shadowMap={enabled:false,needsUpdate:false};this.capabilities={getMaxAnisotropy:()=>1};
   this.info={render:{calls:0,triangles:0},memory:{geometries:0,textures:0}};
+  this.pendingFrames=0;
   this.geometryCache=new Map();this.objectCache=new Map();this.storageCache=new Map();this.textureCache=new Map();this.pipelines=new Map();
   this.context.configure({device,format:this.format,alphaMode:'premultiplied'});
-  device.addEventListener('uncapturederror',event=>this.fail(event.error));
-  device.lost.then(info=>{if(!this.disposed)this.fail(new Error('WebGPU 设备已丢失：'+info.message));});
+  this.handleDeviceError=event=>this.fail(event.error);
+  device.addEventListener('uncapturederror',this.handleDeviceError);
+  device.lost.then(info=>{
+   if(this.disposed||this.destroyRequested)return;
+   this.fail(new Error('WebGPU 设备已丢失：'+info.message));
+  });
  }
  async initialize(){
   const d=this.device;
@@ -47,6 +58,8 @@ export class CadWebGPURenderer {
    {binding:2,visibility:GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}},
    {binding:3,visibility:GPUShaderStage.FRAGMENT,sampler:{type:'filtering'}},
    {binding:4,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}},
+   {binding:5,visibility:GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}},
+   {binding:6,visibility:GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}},
   ]});
   this.pipelineLayout=d.createPipelineLayout({bindGroupLayouts:[this.bindLayout]});
   this.sampler=d.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'repeat',addressModeV:'repeat'});
@@ -55,7 +68,7 @@ export class CadWebGPURenderer {
   this.empty=d.createBuffer({size:16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
   this.setSize(1,1);this.onReady();
  }
- fail(error){if(this.disposed)return;this.failed=true;this.onError(error);}
+ fail(error){if(this.disposed||this.destroyRequested||this.failed)return;this.failed=true;this.failure=error;this.onError(error);}
  setPixelRatio(value){this.pixelRatio=Math.max(1,value||1);this.setSize(this.width,this.height);}
  getPixelRatio(){return this.pixelRatio;}
  setSize(width,height){
@@ -138,23 +151,34 @@ export class CadWebGPURenderer {
   values.set([material.metalness??0,material.roughness??.5,material.isMeshPhysicalMaterial||material.isMeshStandardMaterial?1:0,wire?1:0],56);
   values.set([live?.owner.radius.value??0,patch?(live.fixedRadius<0?live.owner.radius.value:live.fixedRadius):0,motion?.delta??0,patch?1:0],60);
   values.set([live?.owner.records.length??0,live?.skip??-1,live?.skipEnd??-1,live?.joined[0]??-1],64);
-  values.set([live?.joined[1]??-1,0,0,object.isPoints?2:stroke?1:0],68);
+  values.set([live?.joined[1]??-1,live?.concave?1:0,live?.owner.stockMotion?.delta??0,object.isPoints?2:stroke?1:0],68);
   values.set([this.domElement.width,this.domElement.height,(object.isPoints?(material.size??1):material.uniforms?.strokeWidth?.value??material.linewidth??1)*this.pixelRatio,material.uniforms?.dashed?.value?1:0],72);
   values.set([material.map?1:0,material.toneMapped===false?1:0,live?.closure?1:0,0],76);
   const settings=material.cadSurface??{},angle=(settings.textureAngle??0)*Math.PI/180,sourceImage=material.map?.image;
   values.set([Math.cos(angle),Math.sin(angle),settings.textureSize??(material.isMeshPhysicalMaterial?25:1),sourceImage?.width&&sourceImage?.height?sourceImage.width/sourceImage.height:1],80);
   values.set([settings.mapping==='triplanar'?1:0,settings.environmentStrength??1,0,0],84);
+  const capSection=material.cadCapSection;
+  if(capSection){
+   values[79]=capSection.count;
+   values.set([...capSection.u.toArray(),-capSection.u.dot(capSection.origin)],88);
+   values.set([...capSection.v.toArray(),-capSection.v.dot(capSection.origin)],92);
+  }
+  const stockClip=patch?live.owner.stockClip:null;
+  if(stockClip)values.set([stockClip.count,material.cadStockIndex??0,stockClip.epsilon,stockClip.moving?(stockClip.bounded?2:3):1],96);
   if(wire){const hidden=material.depthFunc===6;values.set(hidden?[1,.12,.65,1]:[.05,1,.72,1],52);values[77]=1;values[58]=0;}
   this.device.queue.writeBuffer(state.buffer,0,values);
-  const cuts=this.storage(live?.owner.texture),rounds=this.storage(live?.owner.roundTexture),image=this.image(material.map);
-  if(state.cuts!==cuts||state.rounds!==rounds||state.image!==image){
-   state.group=this.device.createBindGroup({layout:this.bindLayout,entries:[{binding:0,resource:{buffer:state.buffer}},{binding:1,resource:{buffer:cuts}},{binding:2,resource:{buffer:rounds}},{binding:3,resource:this.sampler},{binding:4,resource:image.createView()}]});
-   Object.assign(state,{cuts,rounds,image});
+  const cuts=this.storage(live?.owner.texture),rounds=this.storage(live?.owner.roundTexture),image=this.image(material.map),capBuffer=this.storage(capSection?.texture),stockBuffer=this.storage(stockClip?live.owner.stockTexture:null);
+  if(state.cuts!==cuts||state.rounds!==rounds||state.image!==image||state.capBuffer!==capBuffer||state.stockBuffer!==stockBuffer){
+   state.group=this.device.createBindGroup({layout:this.bindLayout,entries:[{binding:0,resource:{buffer:state.buffer}},{binding:1,resource:{buffer:cuts}},{binding:2,resource:{buffer:rounds}},{binding:3,resource:this.sampler},{binding:4,resource:image.createView()},{binding:5,resource:{buffer:capBuffer}},{binding:6,resource:{buffer:stockBuffer}}]});
+   Object.assign(state,{cuts,rounds,image,capBuffer,stockBuffer});
   }
   return state;
  }
  render(scene,camera){
-  if(this.disposed||this.failed)return;
+  if(this.disposed||this.failed)return true;
+  // Bound latency: do not enqueue stale camera/drag states faster than the
+  // device can present them. The caller retains its dirty flag on false.
+  if(this.pendingFrames>=2)return false;
   this.frameId=(this.frameId??0)+1;
   scene.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
   const viewProjection=multiply(camera.projectionMatrix.elements,camera.matrixWorldInverse.elements),items=[],seen=new Set();
@@ -164,7 +188,7 @@ export class CadWebGPURenderer {
    if(object.geometry&&object.material&&object.layers.test(camera.layers)){
     const materials=Array.isArray(object.material)?object.material:[object.material],geometry=this.geometry(object.geometry,object.isPoints);
     if(geometry){const groups=object.geometry.groups.length?object.geometry.groups:[{start:0,count:geometry.count,materialIndex:0}];
-     for(const group of groups){const material=materials[group.materialIndex]??materials[0];if(!material?.visible)continue;
+     for(const group of groups){const material=materials[group.materialIndex]??materials[0];if(!material?.visible||material.colorWrite===false)continue;
       items.push({object,material,geometry,start:group.start,count:Math.min(group.count,geometry.count-group.start),order:object.renderOrder??0,distance:object.matrixWorld.elements.slice(12,15).reduce((sum,value,i)=>sum+(value-camera.position.toArray()[i])**2,0)});}
     }
    }
@@ -183,15 +207,21 @@ export class CadWebGPURenderer {
    this.info.render.calls++;if(topology==='triangle-list')this.info.render.triangles+=item.count/3;
   }
   pass.end();this.device.queue.submit([encoder.finish()]);
+  this.pendingFrames++;
+  this.device.queue.onSubmittedWorkDone().then(()=>{this.pendingFrames--;},error=>{this.pendingFrames--;this.fail(error);});
   for(const [object,states] of this.objectCache){for(const [material,state] of states)if(!seen.has(object)||state.used!==this.frameId){state.buffer.destroy();states.delete(material);}if(!states.size)this.objectCache.delete(object);}
   this.info.memory.textures=this.textureCache.size;
+  return true;
  }
  dispose(){
-  if(this.disposed)return;this.disposed=true;
+  if(this.disposed)return;this.disposed=true;this.destroyRequested=true;
+  this.device.removeEventListener('uncapturederror',this.handleDeviceError);
+  try{
   for(const states of this.objectCache.values())for(const state of states.values())state.buffer.destroy();
   for(const [geometry,cached] of this.geometryCache){cached.buffer.destroy();if(geometry.__cadGpuDispose){geometry.removeEventListener('dispose',geometry.__cadGpuDispose);delete geometry.__cadGpuDispose;}}
   for(const [texture,cached] of this.storageCache){cached.buffer.destroy();texture.removeEventListener('dispose',cached.dispose);}for(const texture of this.textureCache.values())texture.destroy();
   this.geometryCache.clear();this.objectCache.clear();this.storageCache.clear();this.textureCache.clear();
-  this.depth?.destroy();this.multisample?.destroy();this.white?.destroy();this.empty?.destroy();this.context.unconfigure();this.device.destroy();
+  this.depth?.destroy();this.multisample?.destroy();this.white?.destroy();this.empty?.destroy();this.context.unconfigure();
+  }finally{this.device.destroy();}
  }
 }

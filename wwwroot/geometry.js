@@ -93,12 +93,14 @@ export function exportEdgeTools(feature,edges,stock=[]){
     const tools=[],profiles=rimBevelProfiles(edges,feature),joints=exportEdgeJunctions(profiles,feature,stock);
     for(const [index,source] of profiles.entries()){
         const edge=source.bevelProfile?{...source,topologyProfile:{first:source.bevelProfile.scale,second:source.bevelProfile.scale*source.bevelProfile.ratio}}:source;
-        const tool=chamferFaces([],{...feature,exportSegments:32},{...edge,exportEndJunctions:joints[index]}).map(face=>new Polygon(face.vertices,{featureId:feature.id,face:face.face==='curved'?'curved':`export|${index}|${face.face}`,smooth:face.smooth},1e-8));
+        const faces=chamferFaces([],{...feature,exportSegments:32},{...edge,exportEndJunctions:joints[index]});
+        const tool=faces.map(face=>new Polygon(face.vertices,{featureId:feature.id,face:face.face==='curved'?'curved':`export|${index}|${face.face}`,smooth:face.smooth},1e-8));
+        tool.exportSweepCells=faces.exportSweepCells;tool.additive=!!edge.concave;
         tool.endDomains=[];
         for(let side=0;side<2;side++){
             const cap=joints[index][side];if(!cap?.domain)continue;
             const frame=edge.kind==='curve'?edge.frames[side?edge.frames.length-1:0]:null,axis=frame?frame.normalA.clone().cross(frame.normalB).normalize():edge.b.clone().sub(edge.a).normalize();
-            if(Math.abs(axis.dot(cap.normal))>=1e-8)continue;
+            if(!edge.concave&&Math.abs(axis.dot(cap.normal))>=1e-8)continue;
             const interior=edge.kind==='curve'?edge.frames[side?edge.frames.length-2:1].point.clone().sub(cap.origin):(side?edge.a:edge.b).clone().sub(cap.origin),normal=cap.normal.clone();
             if(normal.dot(interior)>0)normal.negate();tool.endDomains.push({normal,w:normal.dot(cap.origin)});
         }
@@ -302,6 +304,7 @@ export function featurePolygons(doc, feature, context = null) {
             faceGroups=tools.map((faces,index)=>faces.map(face=>({...face,face:face.face.startsWith('surface|')?'surface|'+index+'|'+face.face:face.face==='curved'?'curved':face.face+'|'+index})));
         }else faceGroups=[advancedFaces(doc,feature,{shapes:selectedShapes,resolve:(document,plane)=>resolvePlane(document,plane,new Map(),context),world,axisLine:end.axisLine,faceSections:end.faceSections})];
         const operands=faceGroups.map(faces=>faces.map(face=>new Polygon(face.vertices,{featureId:feature.id,face:face.face,smooth:face.smooth},feature.topologyBevel?1e-8:EPS)).filter(p=>p.normal.lengthSq()>.5));
+        if(feature.mode==='chamfer')operands.forEach((tool,index)=>{tool.additive=!!end.edges[index]?.concave;});
         // A \ (B union C) = (A \ B) \ C. Avoid constructing a huge union of
         // overlapping fillet tools before clipping the actual solid.
         const polygons=operands.flat();if(feature.mode==='chamfer')end.operands=operands;
@@ -309,7 +312,7 @@ export function featurePolygons(doc, feature, context = null) {
         for(const polygon of polygons){if(!polygon.tag.face.startsWith('surface|'))continue;const same=planarGroups.find(p=>p.normal.dot(polygon.normal)>.999999&&Math.abs(p.w-polygon.w)<EPS);if(same)polygon.tag.face=same.tag.face;else planarGroups.push(polygon);}
         end.surfaces=new Map();
         const groups=new Map();for(const polygon of polygons){if(polygon.tag.face==='curved')continue;if(!groups.has(polygon.tag.face))groups.set(polygon.tag.face,[]);groups.get(polygon.tag.face).push(polygon);}
-        for(const [name,faces] of groups){const polygon=faces[0],n=polygon.normal.clone().multiplyScalar(feature.kind==='cut'?-1:1),box=new CAD.Box3();for(const face of faces)for(const point of face.vertices)box.expandByPoint(point);const center=box.getCenter(vec());center.addScaledVector(n,-center.clone().sub(polygon.vertices[0]).dot(n));
+        for(const [name,faces] of groups){const polygon=faces[0],additive=feature.mode==='chamfer'&&operands.some(tool=>tool.additive&&tool.includes(polygon)),n=polygon.normal.clone().multiplyScalar(feature.kind==='cut'&&!additive?-1:1),box=new CAD.Box3();for(const face of faces)for(const point of face.vertices)box.expandByPoint(point);const center=box.getCenter(vec());center.addScaledVector(n,-center.clone().sub(polygon.vertices[0]).dot(n));
             let u=end.base.u.clone().addScaledVector(n,-end.base.u.dot(n));if(u.lengthSq()<1e-6)u=end.base.v.clone().addScaledVector(n,-end.base.v.dot(n));u.normalize();end.surfaces.set(name,frame(center,u,n.clone().cross(u)));
         }
         return polygons;
@@ -417,10 +420,10 @@ export function buildSolid(doc) {
                     const target=selected.some(edge=>body.box.clone().expandByScalar(1e-6).containsPoint(edge.a.clone().add(edge.b).multiplyScalar(.5))&&body.polygons.some(p=>[edge.faceA,edge.faceB].some(ref=>p.tag.featureId===ref.featureId&&p.tag.face===ref.face)));
                     if(!target)return body.polygons;
                     let part=body.polygons.map(p=>new Polygon(p.vertices,p.tag,1e-8));
-                    for(const tool of tools){const box=new CAD.Box3().setFromPoints(tool.flatMap(p=>p.vertices));if(body.box.intersectsBox(box))part=boolean(part,tool.map(p=>new Polygon(p.vertices,p.tag,1e-8)),true,1e-8);}
+                    for(const tool of tools){const box=new CAD.Box3().setFromPoints(tool.flatMap(p=>p.vertices));if(body.box.intersectsBox(box))part=boolean(part,tool.map(p=>new Polygon(p.vertices,p.tag,1e-8)),!tool.additive,1e-8);}
                     return sewTopologyBevel(sewBoundary(part),Polygon);
                 });
-            }else for(const tool of tools)clipped=boolean(clipped,tool,true);
+            }else for(const tool of tools)clipped=boolean(clipped,tool,!tool.additive);
         }
         else if(solid.length){
             // A distant body cannot participate in this operation. Keeping it
@@ -441,7 +444,7 @@ export function buildSolid(doc) {
         }else clipped=operand;
         const next=alreadySewn?clipped:sewBoundary(clipped);
         const after = volume(next);
-        if (feature.kind === 'cut' && before - after < .001) throw new Error('切除轮廓未与实体相交，请检查草图位置和切除深度。');
+        if (feature.kind === 'cut' && !(feature.mode==='chamfer'&&context.ends.get(feature.id).operands?.some(tool=>tool.additive)) && before - after < .001) throw new Error('切除轮廓未与实体相交，请检查草图位置和切除深度。');
         if (after < .001) throw new Error('此操作将移除整个实体，请减小切除范围或深度。');
         solid = recordBodyHistory(next,solid,operand,feature.id);
         } catch(error) {

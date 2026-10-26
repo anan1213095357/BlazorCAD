@@ -12,6 +12,12 @@ function profileAt(profile,common,height){
 export function roundJunction(a,b,awayA,awayB,common,limitA,limitB){
     const direction=awayB.clone().cross(common),denominator=direction.dot(awayA);
     if(Math.abs(denominator)<1e-8)return null;
+    // The source vertex moves along the intersection of the two non-shared
+    // support planes as common depth changes. On inclined loft walls this
+    // is NOT the common face normal, and its axial/transverse shifts matter.
+    const spine=limitA.clone().cross(limitB),depth=spine.dot(common);
+    if(Math.abs(depth)<1e-10)return null;
+    spine.divideScalar(depth);
     const range=profile=>{const heights=profile.offsets.map(p=>common.dot(p)),increasing=heights.at(-1)>heights[0];
         if(heights.some((h,i)=>i&&(increasing?h<heights[i-1]-1e-8:h>heights[i-1]+1e-8)))return null;
         return {heights,low:Math.min(...heights),high:Math.max(...heights)};};
@@ -26,7 +32,7 @@ export function roundJunction(a,b,awayA,awayB,common,limitA,limitB){
         if(!point.toArray().every(Number.isFinite))return null;
         knots.push({height,point,a:p,b:q});
     }
-    const view=(profile,own,other,wall)=>({profile,common,knots:knots.map(k=>({height:k.height,point:k.point,ownNormal:k[own].normal,otherNormal:k[other].normal})),samples:knots.map(k=>k[own].sample),wall});
+    const view=(profile,own,other,wall)=>({profile,common,spine,knots:knots.map(k=>({height:k.height,point:k.point,ownNormal:k[own].normal,otherNormal:k[other].normal})),samples:knots.map(k=>k[own].sample),wall});
     return {a:view(a,'a','b',limitA),b:view(b,'b','a',limitB)};
 }
 export function roundEnd(offset,axis,joint,boundary){

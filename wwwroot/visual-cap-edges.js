@@ -22,7 +22,7 @@ export function visualCapEdges(feature,edges,polygons){
         const straight=!closed&&length>tolerance&&points.every(point=>point.clone().sub(points[0]).cross(delta).length()<=tolerance*length);
         const kind=straight?'line':'curve';
         if(straight){points=[points[0],points.at(-1)];frames=[frames[0],frames.at(-1)];}
-        result.push({kind,closed,points,frames,a:points[0],b:kind==='line'?points.at(-1):points[1],normalA:frames[0].normalA,normalB:frames[0].normalB,endPlanes,endClosures,limit:Infinity,segment:0,visualBoundary:true,
+        result.push({concave:!!edge.concave&&suffix.startsWith('rail-'),kind,closed,points,frames,a:points[0],b:kind==='line'?points.at(-1):points[1],normalA:frames[0].normalA,normalB:frames[0].normalB,endPlanes,endClosures,limit:Infinity,segment:0,visualBoundary:true,
             faceA:{featureId:feature.id,face:'visual-cap|'+edge.visualReferenceIndex+'|'+edge.segment+'|'+suffix},faceB:{featureId:feature.id,face:'curved'}});
     };
     // Reuse the renderer's end/junction solution when publishing selectable
@@ -30,7 +30,7 @@ export function visualCapEdges(feature,edges,polygons){
     const prepared=new Map(),strips=[],records=[];
     for(const edge of edges){
         if(edge.kind==='curve')continue;
-        const [startFace,endFace]=edgeEndPlanes(edge,polygons),strip={index:records.length,closed:false,frames:[{point:edge.a,normalA:edge.normalA,normalB:edge.normalB},{point:edge.b,normalA:edge.normalA,normalB:edge.normalB}],settings:{curve:false,bevel,ratio,radius:r,treatment:feature.id,start:startFace?.normal??null,end:endFace?.normal??null}};
+        const [startFace,endFace]=edgeEndPlanes(edge,polygons),strip={index:records.length,closed:false,frames:[{point:edge.a,normalA:edge.normalA,normalB:edge.normalB},{point:edge.b,normalA:edge.normalA,normalB:edge.normalB}],settings:{concave:!!edge.concave,curve:false,bevel,ratio,radius:r,treatment:feature.id,start:startFace?.normal??null,end:endFace?.normal??null}};
         strip.settings.ratio=edge.bevelProfile?.ratio??ratio;strip.settings.scale=edge.bevelProfile?.scale??1;strip.settings.coherentRim=edge.bevelProfile?.coherentRim??false;
         strip.settings.startClosure=startFace?.closureNormal??null;strip.settings.endClosure=endFace?.closureNormal??null;
         strips.push(strip);records.push(new Float32Array(56));prepared.set(edge,strip.settings);
@@ -41,12 +41,12 @@ export function visualCapEdges(feature,edges,polygons){
             // A junction is selectable when its actual adjacent normals differ.
             // Tangent joins are not new corners; no feature-type whitelist.
             for(const [sample,side] of [[0,'rail-0'],[32,'rail-1']]){
-                const frames=edge.frames.map(frame=>{const cross=section(frame.normalA,frame.normalB,bevel,ratio);return {point:frame.point.clone().addScaledVector(cross.offsets[sample],r),normalA:sample===0?frame.normalA:frame.normalB,normalB:cross.normals[sample]};});
+                const frames=edge.frames.map(frame=>{const cross=section(frame.normalA,frame.normalB,bevel,ratio,1,edge.concave);return {point:frame.point.clone().addScaledVector(cross.offsets[sample],r),normalA:sample===0?frame.normalA:frame.normalB,normalB:cross.normals[sample]};});
                 if(frames.some(frame=>frame.normalA.clone().cross(frame.normalB).lengthSq()>1e-10))add(edge,side,frames.map(frame=>frame.point),frames,edge.closed);
             }
             continue;
         }
-        const axis=edge.b.clone().sub(edge.a).normalize(),settings=prepared.get(edge),cross=section(edge.normalA,edge.normalB,bevel,settings.ratio,settings.scale),ends=[];
+        const axis=edge.b.clone().sub(edge.a).normalize(),settings=prepared.get(edge),cross=section(edge.normalA,edge.normalB,bevel,settings.ratio,settings.scale,edge.concave),ends=[];
         const adjacentNormal=(side,sample,boundary)=>{
             if(boundary===settings[side+'Limit'])return settings[side+'LimitSurfaceNormal']??boundary;
             const normals=settings[side+'SurfaceNormals'];

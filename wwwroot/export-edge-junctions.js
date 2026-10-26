@@ -12,14 +12,14 @@ export function exportEdgeJunctions(edges,feature,stock=[]){
         return edgeEndPlanes(edge,stock).map((plane,side)=>plane?{normal:plane.normal,origin:side?edge.b:edge.a,domain:true}:null);
     });
     if(feature.edgeTreatment!=='fillet')return result;
-    const profiles=edges.map(edge=>edge.kind==='curve'?null:section(edge.normalA,edge.normalB));
+    const profiles=edges.map(edge=>edge.kind==='curve'?null:section(edge.normalA,edge.normalB,false,1,1,edge.concave));
     for(let i=0;i<edges.length;i++)for(let side=0;side<2;side++){
         if(!profiles[i]||result[i][side]?.joint)continue;
         const origin=side?edges[i].b:edges[i].a,away=(side?edges[i].a:edges[i].b).clone().sub(origin).normalize(),matches=[];
         const incident=edges.filter((edge,index)=>index!==i&&[edge.a,edge.b].some(point=>point.distanceToSquared(origin)<1e-10));
         if(incident.length!==1)continue;
         for(let j=i+1;j<edges.length;j++)for(let other=0;other<2;other++){
-            if(!profiles[j]||result[j][other]?.joint)continue;
+            if(!profiles[j]||result[j][other]?.joint||!!edges[i].concave!==!!edges[j].concave)continue;
             const endpoint=other?edges[j].b:edges[j].a;
             if(origin.distanceToSquared(endpoint)>1e-10)continue;
             const direction=(other?edges[j].a:edges[j].b).clone().sub(endpoint).normalize();

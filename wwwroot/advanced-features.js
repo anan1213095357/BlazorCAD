@@ -208,20 +208,20 @@ function rayFaceLimit(origin,direction,polygons){
     const intervals=mergeIntervals(values);return intervals.find(v=>v[0]<1e-3)?.[1]??0;
 }
 const straightEdgeCache=new WeakMap();
-export function solidEdgeOptions(solid,convexOnly=true,reference=null){
+export function solidEdgeOptions(solid,convexOnly=false,reference=null){
     let cached=straightEdgeCache.get(solid);if(!reference&&cached?.has(convexOnly))return cached.get(convexOnly);
     const groups=new Map();for(const polygon of solid){if(polygon.tag.face==='curved'||reference&&!matchesFace(polygon.tag,reference.faceA)&&!matchesFace(polygon.tag,reference.faceB))continue;const key=faceKey(polygon.tag);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(polygon);}
     const faces=[...groups.values()],result=[],boxes=faces.map(polygons=>{const box=new CAD.Box3();for(const polygon of polygons)for(const vertex of polygon.vertices)box.expandByPoint(vertex);return box.expandByScalar(EPS*2);});
     for(let i=0;i<faces.length;i++)for(let j=i+1;j<faces.length;j++){
         if(reference&&!matchesEdgeFaces(faces[i][0].tag,faces[j][0].tag,reference))continue;
         if(!boxes[i].intersectsBox(boxes[j]))continue;
-        const a=faces[i][0],b=faces[j][0],dot=a.normal.dot(b.normal);if(Math.abs(dot)>.999)continue;
+        const a=faces[i][0],b=faces[j][0],dot=a.normal.dot(b.normal);if(Math.abs(dot)>1-1e-10)continue;
         const cross=a.normal.clone().cross(b.normal),direction=cross.clone().normalize(),origin=b.normal.clone().cross(cross).multiplyScalar(a.w).add(cross.clone().cross(a.normal).multiplyScalar(b.w)).divideScalar(cross.lengthSq());
         const first=intervals(faces[i],b.normal,b.w,direction),second=intervals(faces[j],a.normal,a.w,direction),shared=[];
         for(const x of first)for(const y of second){const from=Math.max(x[0],y[0]),to=Math.min(x[1],y[1]);if(to-from>EPS)shared.push([from,to]);}
         const segments=mergeIntervals(shared);
         const insideFace=(p,polygons)=>polygons.some(poly=>poly.vertices.every((a,i)=>{const b=poly.vertices[(i+1)%poly.vertices.length],d=b.clone().sub(a);return d.clone().cross(p.clone().sub(a)).dot(poly.normal)>=-EPS*d.length();}));
-        for(let segment=0;segment<segments.length;segment++){const [from,to]=segments[segment];const middle=origin.clone().addScaledVector(direction,(from+to)/2),inward=direction.clone().cross(a.normal);if(inward.dot(b.normal)>0)inward.negate();if(convexOnly&&!insideFace(middle.clone().addScaledVector(inward,Math.min(.001,(to-from)*.01)),faces[i]))continue;const other=direction.clone().cross(b.normal);if(other.dot(a.normal)>0)other.negate();const limit=Math.min(rayFaceLimit(middle,inward,faces[i]),rayFaceLimit(middle,other,faces[j]));result.push({faceA:{featureId:a.tag.featureId,face:a.tag.face},faceB:{featureId:b.tag.featureId,face:b.tag.face},segment,limit,a:origin.clone().addScaledVector(direction,from),b:origin.clone().addScaledVector(direction,to),normalA:a.normal,normalB:b.normal});}
+        for(let segment=0;segment<segments.length;segment++){const [from,to]=segments[segment];const middle=origin.clone().addScaledVector(direction,(from+to)/2),inward=direction.clone().cross(a.normal);if(inward.dot(b.normal)>0)inward.negate();const concave=!insideFace(middle.clone().addScaledVector(inward,Math.min(.001,(to-from)*.01)),faces[i]);if(convexOnly&&concave)continue;if(concave)inward.negate();const other=direction.clone().cross(b.normal);if(other.dot(a.normal)>0)other.negate();if(concave)other.negate();const limit=Math.min(rayFaceLimit(middle,inward,faces[i]),rayFaceLimit(middle,other,faces[j]));result.push({concave,faceA:{featureId:a.tag.featureId,face:a.tag.face},faceB:{featureId:b.tag.featureId,face:b.tag.face},segment,limit,a:origin.clone().addScaledVector(direction,from),b:origin.clone().addScaledVector(direction,to),normalA:a.normal,normalB:b.normal});}
     }
     if(!reference){if(!cached){cached=new Map();straightEdgeCache.set(solid,cached);}cached.set(convexOnly,result);}return result;
 }
@@ -259,14 +259,14 @@ function curvedBoundaryOptions(solid,reference=null){
     }
     return options;
 }
-export function edgeTreatmentOptions(solid){if(!treatmentCache.has(solid))treatmentCache.set(solid,[...solidEdgeOptions(solid),...curvedBoundaryOptions(solid)]);return treatmentCache.get(solid);}
+export function edgeTreatmentOptions(solid){if(!treatmentCache.has(solid))treatmentCache.set(solid,[...solidEdgeOptions(solid,false),...curvedBoundaryOptions(solid)]);return treatmentCache.get(solid);}
 const matchesFace=(a,b)=>a?.featureId===b?.featureId&&a?.face===b?.face;
 const matchesEdgeFaces=(a,b,reference)=>matchesFace(a,reference.faceA)&&matchesFace(b,reference.faceB)||matchesFace(a,reference.faceB)&&matchesFace(b,reference.faceA);
 const referencedEdgeCache=new WeakMap();
 export function referencedEdgeOptions(solid,reference){
     const key=JSON.stringify([reference.kind??'line',...[reference.faceA,reference.faceB].map(face=>faceKey(face)).sort()]);
     let entries=referencedEdgeCache.get(solid);if(!entries){entries=new Map();referencedEdgeCache.set(solid,entries);}
-    if(!entries.has(key))entries.set(key,(reference.kind??'line')==='curve'?curvedBoundaryOptions(solid,reference):solidEdgeOptions(solid,true,reference));
+    if(!entries.has(key))entries.set(key,(reference.kind??'line')==='curve'?curvedBoundaryOptions(solid,reference):solidEdgeOptions(solid,false,reference));
     return entries.get(key);
 }
 export function resolveSolidEdge(solid,reference,convexOnly=false){
@@ -276,10 +276,10 @@ export function resolveSolidEdge(solid,reference,convexOnly=false){
 export function resolveChamferEdge(solid,reference){const edge=referencedEdgeOptions(solid,reference).find(edge=>(edge.kind??'line')===(reference?.kind??'line')&&edge.segment===reference?.segment&&(matchesFace(edge.faceA,reference.faceA)&&matchesFace(edge.faceB,reference.faceB)||matchesFace(edge.faceA,reference.faceB)&&matchesFace(edge.faceB,reference.faceA)));if(!edge)throw new Error('所选边已改变，请重新选择直边或曲线边。');return edge;}
 function treatmentSection(feature,edge,n1,n2,arcSteps=null){
     const distance=feature.depth,tangent=n1.clone().cross(n2).normalize();
-    const inward1=tangent.clone().cross(n1).normalize(),inward2=tangent.clone().cross(n2).normalize();if(inward1.dot(n2)>0)inward1.negate();if(inward2.dot(n1)>0)inward2.negate();
+    const inward1=tangent.clone().cross(n1).normalize(),inward2=tangent.clone().cross(n2).normalize();if(inward1.dot(n2)>0)inward1.negate();if(inward2.dot(n1)>0)inward2.negate();if(edge.concave){inward1.negate();inward2.negate();}
     const fillet=feature.edgeTreatment==='fillet',theta=Math.acos(CAD.MathUtils.clamp(inward1.dot(inward2),-1,1)),d1=fillet?distance/Math.tan(theta/2):distance*(edge.topologyProfile?.first??1),d2=fillet?d1:distance*(edge.topologyProfile?.second??Math.tan((feature.chamferAngle??45)*Math.PI/180));
     if(!Number.isFinite(d1)||!Number.isFinite(d2))throw new Error('请输入有效的边缘尺寸。');
-    const epsilon=feature.topologyBevel ? .002 : Math.max(.002,distance*.0002),outside=n1.clone().add(n2).multiplyScalar(feature.topologyBevel?epsilon/(1+n1.dot(n2)):epsilon),p1=inward1.clone().multiplyScalar(d1),p2=inward2.clone().multiplyScalar(d2),offsets=[outside,p1.clone().addScaledVector(n1,epsilon),p1];
+    const epsilon=(edge.concave?-1:1)*(feature.topologyBevel ? .002 : Math.max(.002,distance*.0002)),outside=n1.clone().add(n2).multiplyScalar(feature.topologyBevel?epsilon/(1+n1.dot(n2)):epsilon),p1=inward1.clone().multiplyScalar(d1),p2=inward2.clone().multiplyScalar(d2),offsets=[outside,p1.clone().addScaledVector(n1,epsilon),p1];
     const u=inward1,v=inward2.clone().addScaledVector(u,-inward2.dot(u)).normalize();
     if(fillet){const center=inward1.clone().add(inward2).normalize().multiplyScalar(distance/Math.sin(theta/2)),a=p1.clone().sub(center),b=p2.clone().sub(center),from=Math.atan2(a.dot(v),a.dot(u)),to=Math.atan2(b.dot(v),b.dot(u));let sweep=to-from;while(sweep>Math.PI)sweep-=Math.PI*2;while(sweep< -Math.PI)sweep+=Math.PI*2;
         const steps=arcSteps??feature.exportSegments??(feature.previewSegments===8?8:null)??Math.max(8,Math.min(48,Math.ceil(Math.abs(sweep)/(Math.PI/48)-1e-8)));for(let i=1;i<=steps;i++){const angle=from+sweep*i/steps;offsets.push(i===steps?p2.clone():center.clone().addScaledVector(u,distance*Math.cos(angle)).addScaledVector(v,distance*Math.sin(angle)));}
@@ -318,12 +318,36 @@ export function chamferFaces(solid,feature,resolved=null){
             const interior=frames[side?index-1:1].point.clone().sub(frames[index].point),sign=axis.dot(interior)>0?-1:1;
             rings[index][0]=rings[index][0].map(point=>point.clone().addScaledVector(axis,-point.clone().sub(cap.origin).dot(cap.normal)/denominator+sign*Math.max(.002,feature.depth*.0002)));
         }
+        // Offsetting a curved rail can reverse its inner stations. Skinning
+        // those rings as one shell folds the cutter through itself, even if
+        // every mesh edge still has two incident triangles. Export must use
+        // the swept VOLUME there, not this self-intersecting oriented shell.
+        let exportSweepCells=null;
+        if(feature.exportSegments){
+            const steps=edge.closed?frames.length:frames.length-1;
+            let folded=false;
+            for(let step=0;step<steps&&!folded;step++){
+                const next=(step+1)%frames.length,direction=frames[next].point.clone().sub(frames[step].point);
+                for(let vertex=0;vertex<rings[step][0].length;vertex++)if(rings[next][0][vertex].clone().sub(rings[step][0][vertex]).dot(direction)<0){folded=true;break;}
+            }
+            if(folded){
+                const triangles=CAD.ShapeUtils.triangulateShape(sections[0].local[0]);exportSweepCells=[];
+                // Each triangular section sweeps a small convex cell between
+                // stations. Union regularizes overlaps at a curvature collapse;
+                // triangulating first preserves a non-convex cutter profile.
+                for(let step=0;step<steps;step++)for(const triangle of triangles){
+                    const next=(step+1)%frames.length;
+                    exportSweepCells.push([...triangle.map(i=>rings[step][0][i]),...triangle.map(i=>rings[next][0][i])]);
+                }
+            }
+        }
         const normalRings=feature.edgeTreatment==='fillet'?sections.map(section=>[section.offsets.map((offset,index)=>index>=section.arcStart&&index<=section.arcEnd?offset.clone().sub(section.center).normalize():null)]):null;
         const faces=treatmentFaceNames(skin(rings,[sections[0].local,sections.at(-1).local],{closed:edge.closed,planarSides:(_,loop,index)=>!(feature.edgeTreatment==='fillet'&&index>=sections[0].arcStart&&index<sections[0].arcEnd),normalRings}),sections[0]);
         if(circle&&feature.edgeTreatment==='fillet'){
             const surface={kind:'torus',center:circle.center.clone().addScaledVector(edge.normalA,-feature.depth),axis:edge.normalA,majorRadius:circle.radius-circle.sign*feature.depth};
             for(const face of faces)if(face.face==='curved')face.smooth=surface;
         }
+        if(exportSweepCells)faces.exportSweepCells=exportSweepCells;
         return faces;
     }
     const section=treatmentSection(feature,edge,edge.normalA,edge.normalB),tangent=edge.b.clone().sub(edge.a).normalize(),epsilon=feature.topologyBevel?feature.depth*4/Math.sqrt(Math.max(1e-6,(1+edge.normalA.dot(edge.normalB))/2)):Math.max(.002,feature.depth*.0002),start=edge.a.clone().addScaledVector(tangent,-epsilon),end=edge.b.clone().addScaledVector(tangent,epsilon),rings=[start,end].map(p=>[section.offsets.map(offset=>offset.clone().add(p))]);

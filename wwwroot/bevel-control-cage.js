@@ -7,7 +7,7 @@ function intersect(a,ha,b,hb,c,hc){
 }
 function profilePlane(edge){
     const tangent=edge.normalA.clone().cross(edge.normalB).normalize(),a=tangent.clone().cross(edge.normalA).normalize(),b=tangent.clone().cross(edge.normalB).normalize();
-    if(a.dot(edge.normalB)>0)a.negate();if(b.dot(edge.normalA)>0)b.negate();
+    if(a.dot(edge.normalB)>0)a.negate();if(b.dot(edge.normalA)>0)b.negate();if(edge.concave){a.negate();b.negate();}
     const first=a.multiplyScalar(edge.topologyProfile.first),last=b.multiplyScalar(edge.topologyProfile.second),n=last.clone().sub(first).cross(tangent).normalize();
     return {n,h:n.dot(first)};
 }
@@ -20,8 +20,8 @@ export function bevelControlCage(edges,feature){
     result.forEach((edge,index)=>{
         if(edge.kind==='curve')return;
         for(const [side,n] of [[0,edge.normalA],[1,edge.normalB]]){
-            const w=n.dot(edge.a);let group=groups.find(g=>g.n.dot(n)>1-1e-8&&Math.abs(g.w-w)<1e-6);
-            if(!group){group={n,w,items:[]};groups.push(group);}group.items.push({edge,index,side});
+            const w=n.dot(edge.a);let group=groups.find(g=>g.concave===!!edge.concave&&g.n.dot(n)>1-1e-8&&Math.abs(g.w-w)<1e-6);
+            if(!group){group={n,w,concave:!!edge.concave,items:[]};groups.push(group);}group.items.push({edge,index,side});
         }
     });
     for(const group of groups){
@@ -42,7 +42,7 @@ export function bevelControlCage(edges,feature){
                 const away=(entry,p)=>entry.edge.a.clone().add(entry.edge.b).multiplyScalar(.5).sub(p).normalize();
                 if(Math.abs(away(item,origin).dot(away(other,origin)))>.9995)continue;
                 const a=profilePlane(item.edge),b=profilePlane(other.edge),wallA=item.side===0?item.edge.normalB:item.edge.normalA,wallB=other.side===0?other.edge.normalB:other.edge.normalA;
-                const top=intersect(a.n,a.h,b.n,b.h,group.n,0),foot=intersect(wallA,0,wallB,0,group.n,-depth);
+                const top=intersect(a.n,a.h,b.n,b.h,group.n,0),foot=intersect(wallA,0,wallB,0,group.n,group.concave?depth:-depth);
                 if(!top||!foot)continue;
                 // These exact two points bound the shared bevel seam. All
                 // participating faces reference the same control record.

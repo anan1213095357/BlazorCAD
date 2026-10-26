@@ -11,7 +11,7 @@ export function joinThreeBands(endpoints, cells, tolerance, records, section, us
         for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
             for (const other of cells.get([entry.cell[0] + x, entry.cell[1] + y, entry.cell[2] + z].join('/')) ?? []) {
                 const a = entry.strip.settings, b = other.strip.settings;
-                if (b.bevel && a.treatment === b.treatment && a.radius === b.radius && entry.point.distanceToSquared(other.point) <= tolerance * tolerance) group.push(other);
+                if (!!a.concave === !!b.concave && b.bevel && a.treatment === b.treatment && a.radius === b.radius && entry.point.distanceToSquared(other.point) <= tolerance * tolerance) group.push(other);
             }
         }
         group.forEach(item => visited.add(item));
@@ -19,7 +19,7 @@ export function joinThreeBands(endpoints, cells, tolerance, records, section, us
         const origin = group[0].point;
         const data = group.map(item => {
             const frame = item.strip.frames[item.index], settings = item.strip.settings;
-            const cross = section(frame.normalA, frame.normalB, true, settings.ratio, settings.scale);
+            const cross = section(frame.normalA, frame.normalB, true, settings.ratio, settings.scale, settings.concave);
             return { entry: item, frame, cross, away: item.strip.frames[1 - item.index].point.clone().sub(item.point).normalize() };
         });
         const pairs = [];

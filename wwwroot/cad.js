@@ -78,7 +78,11 @@ async function initializeView(id, callback) {if(!viewDisposed)dispose();viewDisp
     lifecycleObserver.observe(document.body,{childList:true,subtree:true});
     const target=host;
     let created;
-    try{created=await CadWebGPURenderer.create({onError:error=>{recordDiagnostic('webgpu',error);bridge?.invokeMethodAsync('CanvasHint','WebGPU：'+error.message);}});}
+    try{created=await CadWebGPURenderer.create({onError:error=>{
+        if(viewDisposed||generation!==viewGeneration||host!==target)return;
+        recordDiagnostic('webgpu',error);
+        callback.invokeMethodAsync('CanvasHint','WebGPU：'+error.message).catch(failure=>recordDiagnostic('webgpu-status',failure));
+    }});}
     catch(error){if(generation===viewGeneration){viewDisposed=true;lifecycleObserver?.disconnect();recordDiagnostic('webgpu-init',error);}throw error;}
     if(viewDisposed||host!==target||viewGeneration!==generation){created.dispose();return;}
     renderer=created;
@@ -101,7 +105,7 @@ async function initializeView(id, callback) {if(!viewDisposed)dispose();viewDisp
     host.addEventListener('wheel',interruptCameraTransition,{capture:true,passive:true});
     document.addEventListener('input',sweepProgressInput);
     host.addEventListener('dblclick',editDimensionAt);host.addEventListener('pointerleave', leave); host.addEventListener('keydown', keydown);window.addEventListener('keydown',focusModelKey);
-    function loop() { const now=performance.now();if(lastFrameRendered&&needsRender&&lastFrameTime!==null)recordTiming('active-frame-interval',now-lastFrameTime);lastFrameTime=now;lastFrameRendered=false;animation = requestAnimationFrame(loop);edgeProfile?.frame();if(pendingPointerMove){const event=pendingPointerMove;pendingPointerMove=null;measure('pointer-move',()=>handleMove(event));}if(pendingEdgeRadius!==null&&performance.now()-lastEdgePreview>33){const queued=pendingEdgeRadius;pendingEdgeRadius=null;lastEdgePreview=performance.now();if(queued.key===edgeProfile?.config?.key)previewEdgeRadius(queued.value);}if(sweepPlaying){const play=sweepPlaying,t=Math.min(1,(performance.now()-play.start)/play.duration);setSweepProgress(play.from+(1-play.from)*t);if(t>=1)sweepPlaying=null;}if(pendingDragEvent&&dragging){const event=pendingDragEvent;pendingDragEvent=null;updateEntityDrag(event);} if(cameraTransition)advanceCameraTransition(performance.now());else controls.update();if(needsRender){lastFrameRendered=true;needsRender=false;depthGizmo?.frame();liveFillet?.frame(camera);const adjusting=!!edgeProfile?.drag;if(liveFillet){solidMesh.receiveShadow=!adjusting;for(const patch of liveFillet.patches)patch.receiveShadow=!adjusting;}floor.visible=!ui?.pickingSketchPlane&&!adjusting;measure('render-submit',()=>renderer.render(scene,camera),{triangles:solidMesh?.geometry.attributes.position.count/3||0});} } loop();
+    function loop() { const now=performance.now();if(lastFrameRendered&&needsRender&&lastFrameTime!==null)recordTiming('active-frame-interval',now-lastFrameTime);lastFrameTime=now;lastFrameRendered=false;animation = requestAnimationFrame(loop);edgeProfile?.frame();if(pendingPointerMove){const event=pendingPointerMove;pendingPointerMove=null;measure('pointer-move',()=>handleMove(event));}if(pendingEdgeRadius!==null&&performance.now()-lastEdgePreview>33){const queued=pendingEdgeRadius;pendingEdgeRadius=null;lastEdgePreview=performance.now();if(queued.key===edgeProfile?.config?.key)previewEdgeRadius(queued.value);}if(sweepPlaying){const play=sweepPlaying,t=Math.min(1,(performance.now()-play.start)/play.duration);setSweepProgress(play.from+(1-play.from)*t);if(t>=1)sweepPlaying=null;}if(pendingDragEvent&&dragging){const event=pendingDragEvent;pendingDragEvent=null;updateEntityDrag(event);} if(cameraTransition)advanceCameraTransition(performance.now());else controls.update();if(needsRender){lastFrameRendered=true;needsRender=false;depthGizmo?.frame();liveFillet?.frame(camera);const adjusting=!!edgeProfile?.drag;if(liveFillet){solidMesh.receiveShadow=!adjusting;for(const patch of liveFillet.patches)patch.receiveShadow=!adjusting;}floor.visible=!ui?.pickingSketchPlane&&!adjusting;const submitted=measure('render-submit',()=>renderer.render(scene,camera),{triangles:solidMesh?.geometry.attributes.position.count/3||0});if(submitted===false){needsRender=true;lastFrameRendered=false;}} } loop();
 }
 function context(e) { e.preventDefault(); }
 function navigationStart() {retargetOrbitToView();navigating=true;if(host)host.dataset.dragHint='';showSnap(null);}
@@ -324,7 +328,9 @@ function sweepPathAt(event){
 }
 function chamferStroke(edge,color=0xffd276){
     const points=[...(edge.points??[edge.a,edge.b])];if(edge.closed)points.push(points[0]);
-    const stroke=sketchStroke(points,null,color,7);stroke.material.depthTest=true;return stroke;
+    const stroke=sketchStroke(points,null,color,7);
+    Object.assign(stroke.material,{depthTest:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2});
+    stroke.renderOrder=20;return stroke;
 }
 
 function tangentEdgeChain(seed,edges=chamferEdges){
@@ -341,11 +347,19 @@ function tangentEdgeChain(seed,edges=chamferEdges){
 }
 function chamferChainStroke(edge,color){const object=new CAD.Group();for(const part of tangentEdgeChain(edge))object.add(chamferStroke(part,color));return object;}
 function chamferEdgeAt(event,edges=chamferEdges){
-    rayAt(event);const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top),body=solidMesh?ray.intersectObject(solidMesh,false)[0]:null;let best=null,score=Infinity;
+    rayAt(event);const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top),probe=new CAD.Raycaster();probe.layers.mask=ray.layers.mask;let best=null,score=Infinity;
     for(const edge of edges){const points=edge.points??[edge.a,edge.b],count=edge.closed?points.length:points.length-1;
         for(let i=0;i<count;i++){const first=points[i],last=points[(i+1)%points.length],a=first.clone().project(camera),b=last.clone().project(camera);if(a.z>1||b.z>1||a.z< -1||b.z< -1)continue;
             const p=new CAD.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),q=new CAD.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),delta=q.clone().sub(p),t=CAD.MathUtils.clamp(mouse.clone().sub(p).dot(delta)/(delta.lengthSq()||1),0,1),distance=mouse.distanceTo(p.addScaledVector(delta,t));if(distance>12)continue;
-            const onEdge=new CAD.Vector3();ray.ray.distanceSqToSegment(first,last,new CAD.Vector3(),onEdge);if(body&&!edge.visualBoundary&&ray.ray.origin.distanceTo(onEdge)>body.distance+Math.max(.3,camera.position.distanceTo(controls.target)*.002))continue;
+            const onEdge=new CAD.Vector3();ray.ray.distanceSqToSegment(first,last,new CAD.Vector3(),onEdge);
+            if(solidMesh&&!edge.visualBoundary){
+                // Test visibility at the EDGE, not at the nearby mouse pixel.
+                // On a concave corner those rays hit different walls; using
+                // mouse depth rejects a visible edge inside the pick radius.
+                const projected=onEdge.clone().project(camera);probe.setFromCamera(new CAD.Vector2(projected.x,projected.y),camera);
+                const body=probe.intersectObject(solidMesh,false)[0];
+                if(body&&probe.ray.origin.distanceTo(onEdge)>body.distance+Math.max(.0001,camera.position.distanceTo(controls.target)*.000002))continue;
+            }
             if(edge.visualBoundary){const direction=camera.isOrthographicCamera?V(0,0,1).applyQuaternion(camera.quaternion):camera.position.clone().sub(onEdge).normalize(),frames=edge.frames;if(frames[i].normalA.dot(direction)<-.01&&frames[i].normalB.dot(direction)<-.01)continue;}
             const rank=distance+(edge.visualBoundary?-.5:0)+camera.position.distanceTo(onEdge)*1e-5;if(rank<score){score=rank;best=edge;}
         }
@@ -898,14 +912,29 @@ function previewEdgeRadius(value){
 }
 function showEdgeRadiusPreview(data){
     if(!ui?.operation||ui.featureMode!=='chamfer'||!solidMesh||!group)return;
-    const original=bodyInfo(doc,solid),materials=data.bodies.map(body=>{let index=original.findIndex(source=>source.id===body.id);if(index<0)index=original.findIndex(source=>source.featureIds.some(id=>body.featureIds.includes(id)));return solidMesh.material[Math.max(0,index)];});
+    const baseMaterials=visualTreatment?.mesh===solidMesh?visualTreatment.original:solidMesh.material;
+    const original=bodyInfo(doc,solid),materials=data.bodies.map(body=>{let index=original.findIndex(source=>source.id===body.id);if(index<0)index=original.findIndex(source=>source.featureIds.some(id=>body.featureIds.includes(id)));return baseMaterials[Math.max(0,index)];});
     const cpuMotion=data.motion&&!data.feature.topologyBevel;
     const geometry=new CAD.BufferGeometry();geometry.setAttribute('position',new CAD.BufferAttribute(cpuMotion?data.position.slice():data.position,3));geometry.setAttribute('normal',new CAD.BufferAttribute(cpuMotion?data.normal.slice():data.normal,3));geometry.setAttribute('uv',new CAD.BufferAttribute(cpuMotion?data.uv.slice():data.uv,2));
     if(data.tangent)geometry.setAttribute('tangent',new CAD.BufferAttribute(data.tangent,4));
     for(const item of data.groups)geometry.addGroup(item.start,item.count,item.materialIndex);geometry.computeBoundingSphere();
     const mesh=new CAD.Mesh(geometry,materials);mesh.userData.sharedMaterial=true;mesh.layers.enable(1);mesh.castShadow=true;mesh.receiveShadow=true;mesh.raycast=()=>{};
     const gpu=data.feature.topologyBevel&&data.motion?installEdgeMotionGpu(mesh,data.motion):null;
-    debugWireframe?.clear();destroy(featurePreviewMesh);featurePreviewMesh=mesh;edgeMotion=data.motion?{data,mesh,gpu,currentRadius:data.feature.depth}:null;group.add(mesh);solidMesh.visible=false;edgeProfile?.error('');if(!data.feature.previewSegments){lastFullEdgeState=data.state;publishEdgePreview(data.feature,true,data.feature.topologyBevel?'实体倒角 · 实际 D '+Number(data.actualDistance.toFixed(4))+' mm':'预览已完成');}syncDebugWireframe();
+    // Rebind saved visual treatments to the NEW physical preview. Keeping
+    // their old stock BVH renders the portions just removed by this bevel and
+    // produces the striped overlapping patch at a fillet/bevel junction.
+    const previewDocument={...viewDocument,features:[...viewDocument.features,data.feature]};
+    const previewPolygons=data.state?importSolidState(previewDocument,data.state):null;
+    debugWireframe?.clear();visualTreatment?.dispose();visualTreatment=null;
+    if(previewPolygons){
+        attachSolidPicking(mesh,previewPolygons);mesh.raycast=()=>{};
+        // Keep full saved rails, rather than shortening them to this one
+        // preview radius. The moving stock clips their extent on the GPU, so
+        // shrinking a bevel can expose the fillet again without rebuilding it.
+        const entries=uniqueVisualEdges(visualEdgeEntries(viewDocument,solid));
+        if(entries.length)visualTreatment=new LiveFillet(mesh,group,entries,.1,host,{visualPersistent:true},solid);
+    }
+    destroy(featurePreviewMesh);featurePreviewMesh=mesh;edgeMotion=data.motion?{data,mesh,gpu,currentRadius:data.feature.depth}:null;group.add(mesh);solidMesh.visible=false;edgeProfile?.error('');if(!data.feature.previewSegments){lastFullEdgeState=data.state;publishEdgePreview(data.feature,true,data.feature.topologyBevel?'实体倒角 · 实际 D '+Number(data.actualDistance.toFixed(4))+' mm':'预览已完成');}syncDebugWireframe();
     const current=edgeProfile?.value;if(Number.isFinite(current)&&current!==data.feature.depth){if(!applyFilletMotion(current)&&edgeProfile?.drag)pendingEdgeRadius={value:current,key:edgeProfile.config?.key};}
     requestRender();
 }
@@ -1315,6 +1344,7 @@ export function exportStl(name,exportId=0) {
     if(ui?.operation||ui?.editingId)throw new Error('请先完成当前操作再导出。');
     stlExportBusy=true;let worker;
     try{
+        const exportDocument=structuredClone(doc);
         worker=new Worker(new URL('./export-solid-worker.js',import.meta.url),{type:'module'});
         stlExportWorker=worker;
         const notify=(message,finished)=>{if(!viewDisposed)bridge?.invokeMethodAsync('StlExportProgress',message,finished,exportId).catch(error=>recordDiagnostic('stl-export-status',error));};
@@ -1322,13 +1352,23 @@ export function exportStl(name,exportId=0) {
         worker.onmessage=({data})=>{
             if(stlExportWorker!==worker)return;
             if(data.progress){notify(data.progress,false);return;}
-            if(data.error){recordDiagnostic('stl-export-worker',data.stack??data.error);finish(data.error);return;}
+            if(data.error){
+                recordDiagnostic('stl-export-worker',data.stack??data.error);
+                let message=data.error;
+                if(data.meshDiagnostic){
+                    try{
+                        download(name+'-stl-diagnostic.json',JSON.stringify({time:new Date().toISOString(),error:data.error,mesh:data.meshDiagnostic,document:exportDocument},null,2),'application/json');
+                        message+=' 已下载 STL 诊断文件。';
+                    }catch(error){recordDiagnostic('stl-export-diagnostic',error);}
+                }
+                finish(message);return;
+            }
             try{if(!(data.buffer instanceof ArrayBuffer))throw new Error('未收到有效的 STL 文件。');download(name+'.stl',data.buffer,'model/stl');finish('STL 已导出，单位毫米'+(Number.isFinite(data.elapsed)?' · '+(data.elapsed/1000).toFixed(1)+' 秒':''));}
             catch(error){finish('STL 导出失败：'+error.message);}
         };
         worker.onerror=event=>{event.preventDefault();finish('导出网格生成失败，未下载不完整模型。');};
         const seed=exportSolidState(doc,true),edges=packExportEdges(visualEdgeEntries(doc,solid));
-        worker.postMessage({document:doc,seed,edges},[seed.positions.buffer,seed.offsets.buffer,seed.tagIds.buffer]);
+        worker.postMessage({document:exportDocument,seed,edges},[seed.positions.buffer,seed.offsets.buffer,seed.tagIds.buffer]);
     }catch(error){worker?.terminate();stlExportWorker=null;stlExportBusy=false;throw error;}
 }
 export function cancelStlExport(){
@@ -1340,7 +1380,7 @@ export function downloadPerformanceReport(){
 }
 export function dispose() {
     cancelStlExport();
-    if(viewDisposed)return;viewDisposed=true;document.removeEventListener('input',sweepProgressInput);sweepGuide=null;sweepMoving=null;sweepPlaying=null;lifecycleObserver?.disconnect();lifecycleObserver=null;
+    if(viewDisposed)return;viewDisposed=true;++viewGeneration;document.removeEventListener('input',sweepProgressInput);sweepGuide=null;sweepMoving=null;sweepPlaying=null;lifecycleObserver?.disconnect();lifecycleObserver=null;
     debugWireframe?.dispose();debugWireframe=null;
     pendingPointerMove=null;lastFrameTime=null;lastFrameRendered=false;cameraTransition=null;sketchCreationFocus=null;depthGizmo?.dispose();depthGizmo=null;featurePreviewMesh=null;extendedSketch?.cancel();extendedSketch=null;
     closeDimensionEditor();

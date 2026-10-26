@@ -12,7 +12,21 @@ function roundOutside(p,row,start,radius,epsilon,fallback){
         let index=0;while(index<knots.length-2&&knots[index+1].height<height)index++;
         const a=knots[index],b=knots[index+1],fraction=Math.max(0,Math.min(1,(height-a.height)/(b.height-a.height)));
         boundary=a.shift+(b.shift-a.shift)*fraction;
-        if(Math.abs(height)<epsilon/radius){const width=a.width+(b.width-a.width)*fraction;if(Math.abs(width)>1e-8){const transverse=joint.common.clone().cross({x:axis[0],y:axis[1],z:axis[2]}).toArray();boundary*=dot(local,transverse)/width;}}
+        // At this depth, start on the actual two-wall intersection. A normal
+        // offset of the original corner only works for perpendicular walls.
+        const width=a.width+(b.width-a.width)*fraction;
+        const spineShift=(joint.spineShift??0)*height,spineWidth=(joint.spineWidth??0)*height,span=width-spineWidth;
+        const transverse=joint.common.clone().cross({x:axis[0],y:axis[1],z:axis[2]}).toArray();
+        const shift=boundary-spineShift,across=dot(local,transverse)-spineWidth;
+        // Keep the oriented seam half-plane even when its transverse span
+        // collapses at tangency. Dividing by span (or using the old end
+        // plane there) changes the clipping boundary at the last knot.
+        const aSpan=a.width-(joint.spineWidth??0)*a.height,bSpan=b.width-(joint.spineWidth??0)*b.height;
+        const reference=Math.abs(aSpan)>=Math.abs(bSpan)?aSpan:bSpan;
+        const orientation=reference<0?-1:1;
+        const distance=((t-spineShift)*span-shift*across)*orientation;
+        const tolerance=epsilon/radius*Math.hypot(span,shift);
+        return start?distance< -tolerance:distance>tolerance;
     }
     return start?t<boundary-epsilon/radius:t>boundary+epsilon/radius;
 }

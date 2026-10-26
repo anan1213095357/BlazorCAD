@@ -25,6 +25,6 @@ export function edgeEndPlanes(edge,polygons){
         // base face still bounds this rail, but its outward normal points into
         // it. Orient the domain cap independently from the source face winding.
         const normal=best.normal.clone(),opensBase=normal.dot(axis)*sign<0;if(opensBase)normal.negate();
-        return {...best,normal,closureNormal:opensBase?best.normal:null};
+        return {...best,normal,closureNormal:edge.concave?best.normal:opensBase?best.normal:null};
     });
 }

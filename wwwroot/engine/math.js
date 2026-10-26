@@ -82,6 +82,8 @@ export class Matrix4 {
 }
 export class Box2 {
  constructor(min=new Vector2(Infinity,Infinity),max=new Vector2(-Infinity,-Infinity)){this.min=min;this.max=max;}
+ set(min,max){this.min.copy(min);this.max.copy(max);return this;}
+ copy(box){return this.set(box.min,box.max);}
  makeEmpty(){this.min.set(Infinity,Infinity);this.max.set(-Infinity,-Infinity);return this;}
  setFromPoints(points){this.makeEmpty();for(const point of points)this.expandByPoint(point);return this;}
  expandByPoint(p){this.min.min(p);this.max.max(p);return this;} expandByScalar(s){this.min.add(new Vector2(-s,-s));this.max.add(new Vector2(s,s));return this;}
@@ -94,6 +96,7 @@ export class Box2 {
 }
 export class Box3 {
  constructor(min=new Vector3(Infinity,Infinity,Infinity),max=new Vector3(-Infinity,-Infinity,-Infinity)){this.min=min;this.max=max;}
+ set(min,max){this.min.copy(min);this.max.copy(max);return this;}
  makeEmpty(){this.min.setScalar(Infinity);this.max.setScalar(-Infinity);return this;}
  setFromPoints(points){this.makeEmpty();for(const point of points)this.expandByPoint(point);return this;}
  expandByPoint(p){this.min.min(p);this.max.max(p);return this;} expandByScalar(s){this.min.addScalar(-s);this.max.addScalar(s);return this;}
