@@ -1,0 +1,48 @@
+﻿<svg class="cad-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    @if (Name == "circle") { <circle cx="12" cy="12" r="8" /><path d="M12 10v4m-2-2h4" /> }
+    else { <path d="@IconPath" /> }
+</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "box";
+    string IconPath => Name switch
+    {
+        "eye" => "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm7 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0",
+        "eye-off" => "M3 3l18 18M2 12s4-7 10-7c2 0 4 1 6 3m4 4s-4 7-10 7c-4 0-7-3-9-6M9 9a4 4 0 0 0 6 6",
+        "sketch" => "M4 4h12v3M4 4v16h16V10M8 16l2-5 7-7 3 3-7 7-5 2Z",
+        "new-sketch" => "M3 6h12v15H3V6Zm3 11 2-5 4-4 3 3-4 4-5 2Zm12-15v8m-4-4h8",
+        "finish" => "M4 5h10M4 5v15h15v-8M8 10l4 4L21 4",
+        "rectangle" => "M4 6h16v12H4V6Zm-1-1h2v2H3V5Zm16 12h2v2h-2v-2Z",
+        "center-rectangle" => "M3 5h18v14H3V5Zm0 0 18 14M21 5 3 19M9 12h6m-3-3v6",
+        "ellipse" => "M21 12a9 5 0 1 1-18 0 9 5 0 1 1 18 0M9 12h6m-3-3v6",
+        "arc" => "M3 17a9 9 0 0 1 18 0M10 17h4m-2-2v4M2 16h2v2H2Zm18 0h2v2h-2Z",
+        "polygon" => "m12 3 9 5v8l-9 5-9-5V8l9-5ZM9 12h6m-3-3v6",
+        "circle3" => "M20 12a8 8 0 1 1-16 0 8 8 0 1 1 16 0M11 3h2v2h-2ZM3 11h2v2H3Zm16 0h2v2h-2Z",
+        "polyline" => "m3 18 6-12 7 12 5-10M2 17h2v2H2Zm6-12h2v2H8Zm7 12h2v2h-2Zm5-10h2v2h-2Z",
+        "slot" => "M8 5h8a7 7 0 0 1 0 14H8A7 7 0 0 1 8 5Z",
+        "line" => "M4 20 20 4M3 19h2v2H3v-2ZM19 3h2v2h-2V3Z",
+        "reference-line" => "M3 19l3-3m3-3 3-3m3-3 3-3M2 18l4 4M18 2l4 4",
+        "dimension" => "M3 6v14m18-14v14M3 15h18M7 11l-4 4 4 4m10-8 4 4-4 4M8 5h8",
+        "revolve" => "M12 2v20M7 5H3v7h4V5Zm9-1a9 9 0 0 1 3 15m-4-1 4 1 1-4M5 16a8 8 0 0 0 5 3",
+        "sweep" => "M3 19V9a6 6 0 0 1 6-6h11m-17 9h6v7H3Zm6 4V9a3 3 0 0 1 3-3h8M17 1l4 3-4 3",
+        "loft" => "m3 5 7-3 4 3-7 3-4-3Zm7 13 7-4 4 4-7 4-4-4ZM3 5l7 13M7 8l7 14M14 5l7 13M10 2l7 12",
+        "chamfer" => "M4 4h10l6 6v10H4V4Zm10 0v10h6M4 14h10M14 14v6m0-16 6 6",
+        "extrude" => "m4 9 8-5 8 5-8 5-8-5Zm0 0v9l8 4 8-4V9m-8 5v8M12 1v9m-3-6 3-3 3 3",
+        "cut" => "m3 8 9-5 9 5v11l-9 4-9-4V8Zm0 0 9 5 9-5m-9 5v10m-4-18 4 2 4-2m-4 2v6",
+        "box" => "m3 7 9-5 9 5v11l-9 5-9-5V7Zm0 0 9 5 9-5m-9 5v11",
+        "plane" => "m3 15 11-9 7 3-11 9-7-3Zm5 0 9-7M8 11l7 3",
+        "select" => "m5 3 14 10-7 1-4 7-3-18Z",
+        "undo" => "M8 5 3 10l5 5M3 10h11a6 6 0 0 1 0 12",
+        "redo" => "m16 5 5 5-5 5m5-5H10a6 6 0 0 0 0 12",
+        "align" => "M4 7h16v13H4V7Zm8-6v12m-3-3 3 3 3-3",
+        "fit" => "M3 9V3h6m6 0h6v6m0 6v6h-6m-6 0H3v-6M8 8h8v8H8V8Z",
+        "save" => "M4 3h13l4 4v14H3V3h1Zm3 0v7h10V3M7 21v-7h10v7",
+        "open" => "M3 8V4h7l3 3h8v4M3 8h7l3 3h8l-3 9H3V8Z",
+        "file" => "M5 3h9l5 5v13H5V3Zm9 0v6h5M9 14h6m-3-3v6",
+        "export" => "M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5",
+        "delete" => "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
+        "close" => "m6 6 12 12M18 6 6 18",
+        "history" => "M4 3v18m0-14h6m-6 9h6M10 4h10v6H10V4Zm0 9h10v6H10v-6Z",
+        _ => "M4 4h16v16H4V4Z"
+    };
+}

@@ -1,0 +1,56 @@
+﻿@inject IJSRuntime JS
+@inject CadCircuitState CircuitState
+@implements IAsyncDisposable
+
+<div class="ribbon-group sketch-palette">
+    <div class="ribbon-commands palette-families">
+        @foreach(var family in Families)
+        {
+            var current=Current(family);
+            var menuId=$"{prefix}-{family.Id}";
+            <div class="palette-family @(family.Tools.Any(t=>t.Id==SelectedTool)?"is-active":"")">
+                <button class="palette-main" disabled="@Disabled" title="@current.Hint" @onclick="()=>Choose(family,current)"><CadIcon Name="@current.Icon" /><span>@current.Label</span></button>
+                <button id="@(menuId+"-anchor")" class="palette-expand" disabled="@Disabled" title="更多@(family.Label)工具" aria-label="更多@(family.Label)工具" aria-haspopup="menu" aria-expanded="false" aria-controls="@menuId" @onclick="()=>Open(menuId)"><span>⌄</span></button>
+            </div>
+            <div id="@menuId" class="sketch-tool-menu" popover="auto" role="menu" aria-label="@family.Label">
+                <div class="tool-menu-heading">@family.Label</div>
+                @foreach(var item in family.Tools)
+                {
+                    <button class="tool-menu-item @(SelectedTool==item.Id?"selected":"")" role="menuitemradio" aria-checked="@(SelectedTool==item.Id?"true":"false")" disabled="@Disabled" @onclick="()=>Choose(family,item,menuId)"><CadIcon Name="@item.Icon" /><span><strong>@item.Label</strong><small>@item.Hint</small></span><span class="tool-choice-mark">@(SelectedTool==item.Id?"✓":"")</span></button>
+                }
+            </div>
+        }
+    </div>
+    <div class="ribbon-caption">绘图工具</div>
+</div>
+
+@code {
+    [Parameter] public string SelectedTool { get; set; }="select";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+    readonly string prefix="sketch-tools-"+Guid.NewGuid().ToString("N");
+    readonly Dictionary<string,string> lastChoices=[];
+    IJSObjectReference? module;
+    bool disposed;
+    sealed record Tool(string Id,string Label,string Icon,string Hint);
+    sealed record Family(string Id,string Label,Tool[] Tools);
+    static readonly Family[] Families=[
+        new("lines","线段",[new("line","直线","line","两点确定一条线段"),new("polyline","连续折线","polyline","逐点连接，吸附首点闭合"),new("referenceLine","参考线","reference-line","虚线辅助，不参与实体")]),
+        new("rectangles","矩形",[new("rectangle","矩形","rectangle","拖动对角点绘制"),new("centerRectangle","中心矩形","center-rectangle","从中心向角点绘制")]),
+        new("circles","圆",[new("circle","圆","circle","圆心与半径"),new("circle3","三点圆","circle3","依次选取圆上的三点")]),
+        new("curves","曲线",[new("arc","圆心圆弧","arc","圆心、起点、逆时针终点"),new("ellipse","椭圆","ellipse","从中心确定两轴尺寸")]),
+        new("profiles","封闭轮廓",[new("slot","长圆槽","slot","从中心定向绘制"),new("polygon","正多边形","polygon","中心、顶点，支持 3–12 边")])
+    ];
+    Tool Current(Family family)=>family.Tools.FirstOrDefault(t=>t.Id==SelectedTool)??family.Tools.FirstOrDefault(t=>lastChoices.GetValueOrDefault(family.Id)==t.Id)??family.Tools[0];
+    async Task Open(string menuId){
+        if(Disabled||disposed||!CircuitState.IsConnected)return;
+        try{module??=await JS.InvokeAsync<IJSObjectReference>("import","./toolbar-menu.js");if(disposed||!CircuitState.IsConnected)return;await module.InvokeVoidAsync("show",menuId,menuId+"-anchor");}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();}catch(OperationCanceledException){}
+    }
+    async Task Choose(Family family,Tool item,string? menuId=null){
+        if(Disabled||disposed||!CircuitState.IsConnected)return;
+        try{if(menuId is not null&&module is not null)await module.InvokeVoidAsync("close",menuId);if(disposed||!CircuitState.IsConnected)return;lastChoices[family.Id]=item.Id;await OnSelect.InvokeAsync(item.Id);}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();}catch(OperationCanceledException){}
+    }
+    public ValueTask DisposeAsync(){disposed=true;module=null;return ValueTask.CompletedTask;}
+}

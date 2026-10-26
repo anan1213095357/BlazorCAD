@@ -1,0 +1,16 @@
+bin/
+obj/
+node_modules/
+test-results/
+tests/output.stl
+tests/workspace.png
+.vs/
+.codex-build/
+tests/bevel-browser.png
+tests/bevel-hollow.png
+tests/export-current.stl
+tests/export-diagnostics.json
+tests/export-first-failure.json
+tests/export-browser-current.stl
+tests/export-page-current.stl
+tests/export-page.png

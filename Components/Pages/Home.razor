@@ -1,0 +1,1300 @@
+﻿@page "/"
+@using BlazorCAD.Models
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject ILogger<Home> Logger
+@inject CadProjectStore Projects
+@inject CadCircuitState CircuitState
+
+<PageTitle>FORMA · 参数化建模工作台</PageTitle>
+<div class="studio" aria-busy="@(initializing || documentBusy)">
+    <header class="header">
+        <a class="brand" href="/"><CadIcon Name="box" /><span>FORMA<span class="brand-dot">CAD</span></span></a>
+        <div class="divider"></div><div class="quick-history" role="group" aria-label="撤销与重做"><button title="撤销" aria-label="撤销" disabled="@(undo.Count==0||operation is not null||initializing||documentBusy)" @onclick="Undo"><CadIcon Name="undo" /></button><button title="重做" aria-label="重做" disabled="@(redo.Count==0||operation is not null||initializing||documentBusy)" @onclick="Redo"><CadIcon Name="redo" /></button></div><button class="project project-rename" title="重命名当前零件" aria-label="重命名当前零件" disabled="@(initializing||documentBusy||saving)" @onclick="BeginRenameProject">@doc.Name <span class="filetype">.cad</span></button><span class="document-tag">参数化零件</span><span class="storage-state @(pendingSave||storageConflict?"pending":"")" role="status" title="@(lastSavedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))">@StorageLabel</span>
+
+        <div class="header-actions"><button title="新建项目" @onclick="BeginNewProject"><CadIcon Name="file" /><span>新建</span></button><button @onclick="ShowProjectBrowser"><CadIcon Name="open" /><span>打开</span></button><button disabled="@(initializing||documentBusy||saving)" @onclick="BeginSaveAs"><CadIcon Name="save" /><span>另存为</span></button><button disabled="@(initializing||documentBusy||saving||serverRevision==0)" title="删除当前项目" @onclick="DeleteCurrentProject"><CadIcon Name="delete" /><span>删除项目</span></button><button disabled="@(documentBusy||saving||!doc.Features.Any(f=>f.Mode=="chamfer"&&!f.VisualOnly))" title="把无下游面引用的旧倒角转为轻量外观处理，可撤销" @onclick="ConvertVisualEdges">轻量边缘</button><button disabled="@exportingStl" @onclick="Export"><CadIcon Name="export" /><span>导出 STL</span></button>@if(exportingStl){<button @onclick="CancelStlExport">取消导出</button>}</div>
+    </header>
+    <nav class="toolbar ribbon" aria-label="建模工具栏">
+        <div class="ribbon-group sketch-lifecycle">
+            <div class="ribbon-commands">
+                <button class="ribbon-command primary-sketch @(editing is not null||pickingSketchPlane?"active":"")" aria-label="@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")" title="@(editing is not null?"完成编辑；有图元保留草图，没有图元直接退出":pickingSketchPlane?"完成编辑并取消选面":"编辑选中草图，或选择一个面开始绘制")" disabled="@(operation is not null||initializing||documentBusy)" @onclick="ToggleSketchEditing"><CadIcon Name="@(editing is not null||pickingSketchPlane?"finish":"sketch")" /><span>@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")</span></button>
+            </div><div class="ribbon-caption">草图</div>
+        </div>
+        <SketchPalette SelectedTool="@tool" Disabled="@(editing is null||operation is not null||initializing||documentBusy)" OnSelect="SetTool" />
+        <div class="ribbon-group selection-tools"><div class="ribbon-commands">
+            <button class="ribbon-command @(tool=="select"?"active":"")" title="选择图元与轮廓" disabled="@(operation is not null)" @onclick='()=>SetTool("select")'><CadIcon Name="select" /><span>选择</span></button>
+            <button class="ribbon-command dimension-command @(tool=="dimension"?"active":"")" title="选择边并放置尺寸" disabled="@(editing is null)" @onclick='()=>SetTool("dimension")'><CadIcon Name="dimension" /><span>智能尺寸</span></button>
+        </div><div class="ribbon-caption">选择与尺寸</div></div>
+        <FeaturePalette CanGenerate="CanFeature" CanLoft="CanSweep" CanSweep="CanSweep" HasSolid="@(doc.Features.Count>0)" Disabled="@(editing is not null||operation is not null||pickingSketchPlane||initializing||documentBusy||saving)" OnStart="StartFeatureMode" />
+        <div class="ribbon-group view-tools"><div class="ribbon-commands">
+            <button class="ribbon-command" title="正对草图平面" @onclick='() => Camera("sketch")'><CadIcon Name="align" /><span>正对草图</span></button>
+            <button class="ribbon-command" title="透视自由视图" @onclick='() => Camera("iso")'><CadIcon Name="box" /><span>自由视图</span></button>
+            <button class="ribbon-command" title="适合窗口" @onclick="Fit"><CadIcon Name="fit" /><span>适合窗口</span></button>
+            <button class="ribbon-command @(debugMode?"active":"")" aria-pressed="@debugMode" title="显示实际三角网格：青绿为可见线，洋红为被遮挡线" @onclick="ToggleDebugMode"><span>Debug 网格</span></button>
+        </div><div class="ribbon-caption">视图</div></div>
+        <div class="ribbon-state"><span class="live-dot"></span><strong>@(editing is not null ? "草图编辑" : pickingSketchPlane ? "选择承载面" : "零件建模")</strong><small>长度单位 · mm</small></div>
+    </nav>
+    <aside class="left-panel">
+        <div class="panel-title"><span class="panel-heading"><CadIcon Name="history" />建模历史</span><span class="panel-count">@doc.Features.Count 步</span></div>
+        <FeatureHistory Document="doc" SelectedSketchId="@sketchId" SelectedEntityId="@profileId" SelectedFeatureId="@historyFeatureId" EditingId="@(editing?.Id)" PickingPlane="pickingSketchPlane" Disabled="@(operation is not null||initializing||documentBusy||saving)" OnPlane="SelectPlane" OnSketch="SelectSketch" OnFeature="SelectHistoryFeature" OnEntity="SelectHistoryEntity" OnEditFeature="EditHistoryFeature" OnEditSketch="EditHistorySketch" OnEditEntity="EditHistoryEntity" OnDimension="EditHistoryDimension" OnToggleVisibility="ToggleSketchVisibility" OnDeleteSketch="DeleteTreeSketch" OnDeleteEntity="DeleteTreeEntity" OnDeleteCoincidence="RemoveTreeCoincidence" OnDeleteFeature="DeleteTreeFeature" OnRename="BeginRenameProject" Bodies="bodies" SelectedBodyId="@selectedBodyId" OnBody="SelectBody" OnDeleteBody="DeleteBody" />
+        <div class="tree-footer"><span class="live-dot"></span><span>@(bodies.Count > 0 ? $"{bodies.Count} 个实体" : "尚未生成实体")</span><small>@doc.Sketches.Count 个草图</small></div>
+    </aside>
+    <main class="viewport">
+        <div class="viewport-top"><div><span class="eyebrow">FORMA / 零件视图</span><h1>@Stage</h1></div><span class="mode-pill">@(editing is not null ? "草图编辑" : "零件建模")</span></div>
+        <div id="cad-canvas" class="cad-canvas"></div>
+        @if(debugMode){<div class="debug-wire-legend"><strong>DEBUG · 实际三角网格</strong><span style="color:#0dffb8">青绿：可见线</span><span style="color:#ff1fa6">洋红：被遮挡线</span></div>}
+        @if(storageMessage is not null) {
+            <div class="storage-notice" role="alert"><span>@storageMessage</span>
+                @if(projectRestoreFailed){<button disabled="@(initializing||documentBusy||saving)" @onclick="BeginNewProject">新建项目</button><button disabled="@(initializing||documentBusy||saving)" @onclick="ShowProjectBrowser">打开项目</button><button disabled="@(initializing||documentBusy||saving)" @onclick="()=>LoadProject(projectId)">重新加载</button>}
+                else{<button disabled="@(initializing||documentBusy||saving||storageConflict)" @onclick="Save">重试保存</button><button disabled="@(initializing||documentBusy||saving)" @onclick="BeginSaveAs">另存为项目</button>}
+            </div>
+        }
+        <div class="canvas-label"><span class="live-dot"></span>@(editing?.Name ?? selectedSketch?.Name ?? SupportName)<span>/ @toolLabel</span></div>
+        @if (doc.Sketches.Count == 0)
+        {
+            <div class="empty-guide @(pickingSketchPlane ? "choosing-plane" : "")"><span>@(pickingSketchPlane ? "02 / SELECT A PLANE" : "01 / NEW SKETCH")</span><h2>@(pickingSketchPlane ? "选择一个彩色网格面" : "从编辑草图开始")</h2><p>@(pickingSketchPlane ? "点击三维中的 XY、XZ 或 YZ 面，选中后自动正对并进入草图。" : "点击顶部「编辑草图」，再在三维中选择草图平面。")</p></div>
+        }
+        <div class="axis-legend"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
+    </main>
+    <aside class="right-panel"><div class="panel-title">@(operation is not null ? "特征设置" : "属性与选择") <span>⚙</span></div>
+        <div class="property-body" @key="revision">
+            <span class="eyebrow">参数面板</span><h2>@(operation is not null ? (editingFeatureId is not null ? "编辑 · " : "") + CurrentFeature().Label : editing is not null ? "编辑草图" : "当前选择")</h2>
+            @if (operation is not null)
+            {
+                @if(featureMode=="chamfer"){<div class="selection-card">@(chamferEdges.Count==0?"点击直边或圆形边界，可连续选择多条":"已选择 "+chamferEdges.Count+" 条边 · 再点可取消")</div>}
+                else if(featureMode=="sweep"&&thinWall){<div class="selection-card">开放截面 · 薄壁扫描</div>}
+                else {<div class="selection-card">已选择 @regionKeys.Count 个封闭区域</div>}
+                @if(editingFeatureId is not null&&featureMode!="chamfer") { <button class="wide-button secondary" @onclick="EditFeatureSourceSketch">编辑来源草图尺寸</button> }
+                @if(featureMode=="extrude") {
+                <label class="field-label" for="end-condition">终止条件</label>
+                <select id="end-condition" class="text-input" value="@endCondition" @onchange="SetEndCondition">
+                    <option value="blind">指定距离</option>
+                    <option value="throughAll" disabled="@(doc.Features.Count == 0)">贯穿全部</option>
+                    <option value="upToFace" disabled="@(doc.Features.Count == 0)">到指定面</option>
+                </select>
+                <label class="check-field"><input id="feature-reversed-input" type="checkbox" checked="@reversed" @onchange="SetReversed" />反向</label>
+                @if (endCondition == "blind")
+                {
+                    <label class="number-field"><span>距离</span><input id="feature-depth-input" type="number" min="-1000" max="1000" step="0.1" value="@N(reversed?-distance:distance)" @onchange="SetDistance" /><small>mm</small></label><p class="description">拖动游标越过草图平面可反向，负数表示反向距离。</p>
+                }
+                else if (endCondition == "upToFace")
+                {
+                    <button class="wide-button secondary @(pickingTarget ? "picking" : "")" @onclick="BeginTargetPick">@(pickingTarget ? "请在画布点击终止面…" : targetFace is null ? "选择终止面" : "重新选择终止面")</button>
+                    <div class="selection-card">@(targetFace is null ? "尚未选择终止面" : "终止平面已选中（蓝色）")</div>
+                }
+                }
+                else if(featureMode=="revolve") {
+                    <p class="description">截面保持原尺寸对齐到参照轴所在平面后旋转，原草图不缩放。</p>
+                    <label class="field-label">旋转轴</label><select class="text-input" value="@(rotationAxisSelected?(axisModelEdge is not null?"model":axisEntityId is null?axis:(axisSketchId??sketchId)+"|"+axisEntityId+"|"+axisEdgeIndex):"")" @onchange="SetRevolveAxis"><option value="">在视口点击草图直边、参考线或实体直边</option>@if(axisModelEdge is not null){<option value="model">已选择实体直边</option>}<option value="X">草图 X 轴</option><option value="Y">草图 Y 轴</option>@foreach(var axisSketch in doc.Sketches.Where(s=>s.Finished)){@foreach(var shape in axisSketch.Entities){@foreach(var axisEdge in shape.RotationEdges){<option value="@(axisSketch.Id+"|"+shape.Id+"|"+axisEdge)">@axisSketch.Name · @(shape.Kind=="line"?(shape.Construction?"参考线":"直线"):shape.Kind=="rectangle"?"矩形边":shape.Kind=="polygon"?"多边形边":"槽直边") @(axisSketch.Entities.IndexOf(shape)+1) · @(axisEdge+1)</option>}}}</select>
+                    <button class="wide-button secondary @(pickingRotationAxis?"picking":"")" @onclick="BeginRotationAxisPick">@(pickingRotationAxis?"点击任意草图直边、参考线或实体直边…":"选择 / 更换旋转参照线")</button>
+                    @if(rotationAxisSelected&&axisEntityId is null&&axisModelEdge is null){<label class="number-field"><span>轴偏移</span><input type="number" min="-1000" max="1000" value="@N(axisOffset)" @onchange="SetAxisOffset" /><small>mm</small></label>}
+                    <label class="number-field"><span>旋转角度</span><input type="number" min="1" max="360" value="@N(revolveAngle)" @onchange="SetRevolveAngle" /><small>°</small></label><label class="check-field"><input id="feature-reversed-input" type="checkbox" checked="@reversed" @onchange="SetReversed" />反向</label>
+                }
+                else if(featureMode=="sweep") {
+                    <div class="section-label">① 闭合截面</div>
+                    <button class="wide-button secondary @(sweepPickRole=="profile"?"picking":"")" @onclick='()=>BeginSweepPick("profile")'>@(sweepPickRole=="profile"?"点击三维中的闭合轮廓…":"选择 / 更换截面")</button>
+                    <label class="field-label">截面草图</label><select class="text-input" value="@(sketchId??"")" @onchange="SetSweepProfileSketch"><option value="">选择闭合截面草图</option>@foreach(var source in doc.Sketches.Where(s=>s.Finished&&(loftChoices.Any(c=>c.SketchId==s.Id)||thinWall))){<option value="@source.Id">@source.Name</option>}</select>
+                    @if(!thinWall&&sketchId is not null){<label class="field-label">闭合区域</label><select class="text-input" value="@(loftChoices.FirstOrDefault(c=>c.SketchId==sketchId&&c.RegionKeys.SequenceEqual(regionKeys))?.Value??"")" @onchange="SetSweepRegion"><option value="">请在画布选择一个连通闭合区域</option>@foreach(var choice in loftChoices.Where(c=>c.SketchId==sketchId)){<option value="@choice.Value">@choice.Label</option>}</select>}
+                    <div class="section-label">② 扫描路径 · 不要求闭合</div>
+                    <button class="wide-button secondary @(sweepPickRole=="path"?"picking":"")" @onclick='()=>BeginSweepPick("path")'>@(sweepPickRole=="path"?"点击直线、圆弧或路径曲线…":"选择 / 更换路径")</button>
+                    <label class="field-label">路径草图</label><select class="text-input" value="@(pathSketchId??"")" @onchange="SetPathSketch"><option value="">选择路径所在草图</option>@foreach(var path in doc.Sketches.Where(s=>s.Finished&&s.Id!=sketchId&&s.Entities.Any(e=>e.Kind is "line" or "arc" or "circle" or "ellipse"))){<option value="@path.Id">@path.Name</option>}</select>
+                    @if(doc.Sketches.FirstOrDefault(s=>s.Id==pathSketchId) is {} pathSketch){<label class="field-label">路径曲线</label><select class="text-input" value="@(pathEntityId??"")" @onchange="SetPathEntity"><option value="">连续直线链（全部直线）</option>@foreach(var curve in pathSketch.Entities.Where(e=>e.Kind is "line" or "arc" or "circle" or "ellipse")){<option value="@curve.Id">@(curve.Kind switch{"line"=>"直线","arc"=>"圆弧","circle"=>"圆",_=>"椭圆"}) @(pathSketch.Entities.IndexOf(curve)+1)</option>}</select>}
+                    <details class="sweep-extra"><summary>辅助创建路径（可选）</summary>
+                        <label class="number-field"><span>路径长度</span><input type="number" min="1" max="1000" value="@N(centerPathLength)" @onchange="SetCenterPathLength" /><small>mm</small></label>
+                        <label class="number-field"><span>偏离法线</span><input type="number" min="-180" max="180" value="@N(centerPathAngle)" @onchange="SetCenterPathAngle" /><small>°</small></label>
+                        <button class="wide-button secondary" disabled="@(sketchId is null||thinWall||regionKeys.Count==0||documentBusy||saving)" @onclick="CreateCenterSweepPath">@(CenterSweepPath is null?"从截面中心创建路径":"更新中心路径")</button>
+                        <p class="description">0° 沿截面法线延伸，其他角度生成斜线。起点关联截面中心，路径会作为独立草图保存，可再编辑或续画折线。</p>
+                    </details>
+                    <label class="field-label">截面方向</label><select class="text-input" value="@sweepOrientation" @onchange="SetSweepOrientation"><option value="follow">自动对齐路径方向</option><option value="profile">保持原截面起始方向</option></select>
+                    <label class="field-label">路径插值</label><select class="text-input" value="@pathInterpolation" @onchange="SetPathInterpolation"><option value="native">跟随原始路径</option><option value="spline">平滑样条路径（直线链控制点）</option></select>
+                    <label class="check-field"><input type="checkbox" checked="@reversed" @onchange="SetReversed" />反向路径</label>
+                    @if(previewState.Valid){<div class="sweep-preview-control"><label for="sweep-progress">截面推进预览 <span id="sweep-progress-value">0%</span></label><input id="sweep-progress" type="range" min="0" max="100" value="0" /><button class="wide-button secondary" @onclick='()=>InvokeView("playSweepGuide")'>播放 / 暂停截面推进</button></div>}
+                    <p class="description">截面只提供形状，路径决定实体位置，两者无需相交或共面。截面中心自动放到路径起点，默认对齐路径方向并沿路径推进；原草图保持原位。反向路径可切换起始端。</p>
+                    <details class="sweep-extra"><summary>更多：开放截面薄壁（可选）</summary><label class="check-field"><input type="checkbox" checked="@thinWall" @onchange="SetSweepThinWall" />使用开放截面加厚</label>
+                    @if(thinWall&&selectedSketch is not null){<label class="field-label">开放轮廓</label><select class="text-input" value="@(openProfileEntityId??"")" @onchange="SetOpenProfileEntity"><option value="">连续直线链（非参考线）</option>@foreach(var curve in selectedSketch.Entities.Where(e=>!e.Construction&&e.Kind is "line" or "arc")){<option value="@curve.Id">@(curve.Kind=="arc"?"圆弧":"直线") @(selectedSketch.Entities.IndexOf(curve)+1)</option>}</select><label class="number-field"><span>壁厚</span><input type="number" min="0.1" max="1000" step="0.1" value="@N(wallThickness)" @onchange="SetWallThickness" /><small>mm</small></label><select class="text-input" value="@wallSide" @onchange="SetWallSide"><option value="center">对称加厚</option><option value="left">轮廓左侧</option><option value="right">轮廓右侧</option></select>}
+                    </details>
+                }
+                else if(featureMode=="loft") {
+                    <div class="section-label">截面顺序 · @(loftSections.Count+1) 个</div><div class="selection-card">01 · @selectedSketch?.Name · 起始截面</div>
+                    @for(var i=0;i<loftSections.Count;i++){var index=i;var section=loftSections[i];<div class="loft-section-row"><span>@((i+2).ToString("00"))</span><strong title="@LoftSectionName(section)">@LoftSectionName(section)</strong><button class="delete-button" title="移除此截面" @onclick="()=>RemoveLoftSection(index)">✕</button></div>}
+                    <p class="description" role="status">@(loftSections.Count==0?"请在三维视口点击下一个闭合草图区域或实体平面。":"可以继续点击截面，或直接确认完成放样。") 按点击顺序连接，最多 9 个截面。</p>
+                }
+                else if(featureMode=="chamfer") {
+                    <p class="description">@(UseTopologyBevel?"实体边倒角：使用你设置的尺寸，新生成的边可以继续倒角。":CurrentFeature().VisualOnly?"轻量外观处理：实时改变边缘外观，草图参照和 STL 导出使用原始几何。":"此历史倒角面已被引用，保留实体处理以维持后续草图。")</p><label class="field-label">边缘处理</label><select class="text-input" value="@edgeTreatment" @onchange="SetEdgeTreatment"><option value="chamfer">直倒角 · 距离与角度</option><option value="fillet">圆角 · 圆弧半径</option></select>
+                    <label class="number-field"><span>@(edgeTreatment=="fillet"?"圆角半径":"倒角距离")</span><input type="number" min="0.1" step="0.1" value="@N(distance)" @onchange="SetDistance" /><small>mm</small></label>
+                    @if(edgeTreatment=="chamfer"){<label class="number-field"><span>角度</span><input type="number" min="1" max="89" value="@N(chamferAngle)" @onchange="SetChamferAngle" /><small>°</small></label>}
+                    @if(chamferEdges.Count>0){<div class="edge-profile-editor"><div class="section-label">@(edgeTreatment=="fillet"?"圆角截面 · 拖动弧线":"倒角截面 · 拖动斜线")</div><canvas id="edge-profile-canvas" tabindex="0" aria-label="拖动截面调整边缘处理尺寸"></canvas><div id="edge-profile-error" role="status"></div><p class="description">网格单位 mm。拖动截面线调整尺寸，三维实体同步预览；Shift 精调，Esc 撤回。</p></div>}
+                    @for(var i=0;i<chamferEdges.Count;i++){var index=i;<div class="constraint-property-row"><span>棱边 @(i+1)</span><button @onclick="()=>RemoveTreatmentEdge(index)">移除</button></div>}
+                    <p class="description">可选择直边、圆柱端部、圆孔口及椭圆边界。曲线边整体高亮并按整条边处理，圆角由半径控制。</p>
+                }
+                <div class="preview-message @(!previewState.Valid ? "invalid" : "")" role="status">@previewState.Message
+                    @if (previewState.Valid && featureMode=="extrude"&&endCondition != "blind") { <span>有效距离 @N(previewState.Min)–@N(previewState.Max) mm</span> }
+                </div>
+                <p class="description">@(featureMode=="chamfer"?(edgeTreatment=="fillet"?"拖动弧线实时查看三维圆角，R 为当前半径。确认后生成实体特征并自动保存。":"当前显示处理后的外形。确认后生成特征并自动保存。"):"绿色为增材预览，红色为减材预览。确认后生成特征并自动保存。")@if(featureMode=="extrude"){<span>指定距离可拖动画布刻度游标，Shift 精调。</span>}</p>
+                <button id="feature-confirm" class="wide-button" disabled="@(!CanConfirmFeature)" @onclick="ConfirmFeature">@($"✓ 确认{CurrentFeature().Label}")</button><button class="wide-button secondary" @onclick="CancelFeature">取消</button>
+            }
+            else
+            {
+                @if (editing is null && selectedSketch is not null)
+                {
+                    <div class="selection-card">已选择 @regionKeys.Count 个区域 · 无需先标注尺寸</div>
+                    <div class="section-label">草图属性</div>
+                }
+                <label class="field-label">反射环境</label><select class="text-input" value="@doc.Environment" @onchange="ChangeEnvironment"><option value="studio">工业摄影棚</option><option value="workshop">车间灯光</option><option value="soft">柔光环境</option><option value="none">无环境反射</option></select>
+                @if(selectedBody is {} currentBody){
+                    var appearance=BodyAppearance;
+                    <div class="section-label">@currentBody.Name · 独立材质</div>
+                    <button class="wide-button secondary" @onclick="()=>DeleteBody(currentBody.Id)">删除实体及关联步骤</button>
+                    <label class="field-label">工业材质</label><select class="text-input" value="@appearance.Preset" @onchange="ChangeMaterialPreset"><option value="steel">不锈钢</option><option value="aluminum">铝合金</option><option value="copper">铜</option><option value="brass">黄铜</option><option value="iron">铸铁</option><option value="paint">工业烤漆</option><option value="plastic">工程塑料</option><option value="rubber">橡胶</option></select>
+                    <label class="number-field"><span>颜色</span><input type="color" value="@appearance.Color" @onchange='e=>ChangeMaterial("color",e)' /></label>
+                    @foreach(var parameter in new[]{("roughness","粗糙度",appearance.Roughness),("metalness","金属度",appearance.Metalness),("specular","高光强度",appearance.Specular),("clearcoat","涂层",appearance.Clearcoat),("anisotropy","拉丝强度",appearance.Anisotropy),("grain","表面细节",appearance.Grain)}){var field=parameter.Item1;<label class="number-field"><span>@parameter.Item2</span><input type="number" min="0" max="1" step="0.05" value="@N(parameter.Item3)" @onchange="e=>ChangeMaterial(field,e)" /></label>}
+                    <label class="number-field"><span>拉丝方向</span><input type="number" min="-360" max="360" value="@N(appearance.BrushAngle)" @onchange='e=>ChangeMaterial("brushAngle",e)' /><small>°</small></label>
+                    <label class="number-field"><span>环境反射</span><input type="number" min="0" max="3" step="0.1" value="@N(appearance.EnvironmentStrength)" @onchange='e=>ChangeMaterial("environmentStrength",e)' /></label>
+                    <label class="field-label">上传颜色贴图 · PNG / JPEG / WebP</label><InputFile OnChange="UploadBodyTexture" accept="image/png,image/jpeg,image/webp" disabled="@(documentBusy||saving)" />
+                    @if(appearance.TextureId is not null){<label class="field-label">自动映射</label><select class="text-input" value="@appearance.Mapping" @onchange='e=>ChangeMaterial("mapping",e)'><option value="uniform">等密度表面映射 · 保持棋盘格比例</option><option value="triplanar">三向混合 · 柔化接缝</option></select><label class="number-field"><span>贴图高度</span><input type="number" min="0.1" max="1000" step="0.1" value="@N(appearance.TextureSize)" @onchange='e=>ChangeMaterial("textureSize",e)' /><small>mm</small></label><label class="number-field"><span>贴图旋转</span><input type="number" min="-360" max="360" value="@N(appearance.TextureAngle)" @onchange='e=>ChangeMaterial("textureAngle",e)' /><small>°</small></label><button class="wide-button secondary" @onclick="RemoveBodyTexture">移除贴图</button>}
+                    <p class="description">仅调整当前实体。贴图按毫米统一密度。默认等密度表面映射保留棋盘格比例，也可切换三向混合柔化接缝。</p>
+                }
+                <label class="field-label">项目名称</label><input class="text-input" value="@doc.Name" @onchange="Rename" maxlength="40" />
+                @if (historyFeature is { } selectedStep)
+                {
+                    <div class="section-label">特征步骤 @(doc.Features.IndexOf(selectedStep) + 1)</div><div class="selection-card">@selectedStep.Label · @FeatureLimit(selectedStep)<br />@if(selectedStep.Mode=="chamfer"){<span>参照：实体棱边</span>}else{<span>来源：@(doc.Sketches.FirstOrDefault(s => s.Id == selectedStep.SketchId)?.Name)</span>}</div>
+                }
+                <div class="section-label">草图承载面</div><div class="selection-card">@SupportName</div>
+                @if(selectedSketch is {} offsetSketch&&offsetSketch.Plane.FeatureId is null&&offsetSketch.Plane.SourceSketchId is null){<label class="number-field"><span>基准面偏移</span><input type="number" min="-1000" max="1000" value="@N(offsetSketch.Plane.Offset)" @onchange="SetSketchOffset" /><small>mm</small></label>}
+                @if (editing is null)
+                {
+                    @if (pickingSketchPlane) { <div class="selection-card">请选择三维中的彩色网格面，或已有实体的平面。选择后自动对齐并进入草图。</div> }
+                }
+                else
+                {
+                    <div class="selection-card">属性参数可直接修改；只有明确标注的尺寸才成为约束，吸附点会建立重合关系。</div>
+                    @if(editing.Entities.Count>0) {
+                        <label class="field-label">编辑图元</label>
+                        <select class="text-input" value="@profileId" @onchange="SelectEditingEntity">
+                            @foreach(var item in editing.Entities) { <option value="@item.Id">@(item.Kind switch { "circle"=>"圆", "slot"=>"长圆槽", "ellipse"=>"椭圆","arc"=>"圆弧","polygon"=>"多边形","line"=>item.Construction?"参考线":"直线", _=>"矩形" }) @(editing.Entities.IndexOf(item)+1)</option> }
+                        </select>
+                    }
+                }
+                @if(editing is not null&&tool=="polygon") { <label class="field-label">新多边形边数</label><select class="text-input" value="@polygonSides" @onchange="SetPolygonSides">@for(var count=3;count<=12;count++){<option value="@count">@count 边形</option>}</select> }
+                @if (entity is not null)
+                {
+                    <div class="section-label">草图图元</div><div class="selection-card">@ProfileName<br />@(selectedSketch?.Finished == true ? "图元用于编辑尺寸，区域用于生成特征" : "未标注尺寸仅为参数，不自动锁定大小")</div>
+                    <div class="section-label">图元参数 <span>mm</span></div>
+                    @if(entity.Kind is "circle" or "arc" or "polygon")
+                    {
+                        <label class="number-field"><span>@(entity.Kind=="circle"?"直径":"半径")</span><input type="number" min="@(entity.Kind=="circle"?2:1)" max="@(entity.Kind=="circle"?2000:1000)" value="@N(entity.Kind=="circle"?entity.Radius*2:entity.Radius)" @onchange='e => ChangeEntityParameter(entity.Kind=="circle"?"diameter":"radius",e)' /><small>mm</small></label>
+                    }
+                    else if(entity.Kind != "line")
+                    {
+                        <label class="number-field"><span>@(entity.Kind=="slot"?"总长":"宽度")</span><input type="number" min="1" max="1000" value="@N(entity.Width)" @onchange='e => ChangeEntityParameter("width",e)' /><small>mm</small></label>
+                        <label class="number-field"><span>@(entity.Kind=="slot"?"槽宽":"高度")</span><input type="number" min="1" max="1000" value="@N(entity.Height)" @onchange='e => ChangeEntityParameter("height",e)' /><small>mm</small></label>
+                    }
+                    @if(entity.Kind is "slot" or "ellipse" or "polygon") { <label class="number-field"><span>方向角度</span><input type="number" min="-360" max="360" value="@N(entity.Angle)" @onchange='args=>ChangeEntityParameter("angle",args)' /><small>°</small></label> }
+                    @if(entity.Kind=="polygon") { <label class="number-field"><span>边数</span><input type="number" min="3" max="12" step="1" value="@entity.Sides" @onchange='args=>ChangeEntityParameter("sides",args)' /></label> }
+                    @if(entity.Kind=="arc") { <label class="number-field"><span>起始角度</span><input type="number" min="-360" max="360" value="@N(entity.StartAngle)" @onchange='args=>ChangeEntityParameter("startAngle",args)' /><small>°</small></label><label class="number-field"><span>扫角</span><input type="number" min="-359" max="359" value="@N(entity.SweepAngle)" @onchange='args=>ChangeEntityParameter("sweepAngle",args)' /><small>°</small></label> }
+                    @if(entity.Kind=="line") { <label class="number-field"><span>长度</span><input type="number" min="1" max="1000" value="@N(EdgeValue(entity,0))" @onchange='args=>ChangeEntityParameter("length",args)' /><small>mm</small></label> }
+                    <label class="number-field"><span>位置 X</span><input disabled="@(entity.FixedPoint != "none")" type="number" value="@N(entity.X)" @onchange='e => ChangeEntityParameter("x",e)' /><small>mm</small></label>
+                    <label class="number-field"><span>位置 Y</span><input disabled="@(entity.FixedPoint != "none")" type="number" value="@N(entity.Y)" @onchange='e => ChangeEntityParameter("y",e)' /><small>mm</small></label>
+                    @if(editing is not null)
+                    {
+                        <div class="section-label">几何约束</div>
+                        <label class="field-label">固定点（保持当前位置）</label>
+                        <select class="text-input" value="@entity.FixedPoint" @onchange="ChangeFixedPoint">
+                            <option value="none">无 · 位置可移动</option>
+                            @if(entity.Kind is "circle" or "arc" or "polygon" or "ellipse") { <option value="center">固定中心</option> }
+                            else if(entity.Kind=="line") { <option value="start">固定起点</option><option value="end">固定终点</option> }
+                            else { <option value="center">固定中心</option><option value="bottomLeft">固定左下角</option><option value="topLeft">固定左上角</option><option value="topRight">固定右上角</option><option value="bottomRight">固定右下角</option> }
+                        </select>
+                        @if(entity.Kind!="line")
+                        {
+                            <label class="field-label">中心到参考线的距离</label>
+                            <select class="text-input" value="@(entity.ReferenceLineId??"")" @onchange="ChangeReferenceLine">
+                                <option value="">无距离约束</option>
+                                @foreach(var guide in selectedSketch!.Entities.Where(e=>e.Kind=="line")) { <option value="@guide.Id">参考线 @(selectedSketch.Entities.IndexOf(guide)+1)</option> }
+                            </select>
+                            @if(entity.ReferenceLineId is not null) { <label class="number-field"><span>有向距离</span><input type="number" min="-1000" max="1000" value="@N(entity.ReferenceOffset)" @onchange="ChangeReferenceOffset" /><small>mm</small></label> }
+                        }
+                        <p class="description">选择工具可直接拖边或角点：有可用尺寸自由度时缩放；对应尺寸已锁定且位置未固定时移动。橙色点为固定锚点，悬停可查看动作提示。</p>
+                        @if(edgeIndex is { } constraintEdge && entity.DimensionedEdges.Contains(constraintEdge)) { <button class="wide-button secondary" @onclick="RemoveDimension">解除此尺寸约束</button> }
+                    }
+                    @if(entity.Coincidences.Count>0) {
+                        <div class="section-label">重合约束 <span>@entity.Coincidences.Count 条</span></div>
+                        @foreach(var relation in entity.Coincidences) {
+                            <div @key="relation.Id" class="constraint-property-row"><span>@relation.Description</span><button class="delete-button" disabled="@(operation is not null||pickingSketchPlane||initializing||documentBusy||saving)" @onclick="()=>RemoveCoincidence(relation.Id)">解除</button></div>
+                        }
+                    }
+                    @if(entity.ModelDimensions.Count>0) {
+                        <div class="section-label">两条线之间的距离</div>
+                        @foreach(var distance in entity.ModelDimensions) {
+                            var dimension=distance.Index;
+                            <label class="number-field"><span>@(distance.ReferenceEntityId is null?"实体—草图":"草图—草图")</span><input type="number" min="0" max="1000" value="@N(distance.Distance)" @onchange="args=>ChangeModelDistance(dimension,args)" /><small>mm</small></label>
+                            @if(editing is not null) { <button class="delete-button" @onclick="()=>RemoveModelDimension(dimension)">解除此间距</button> }
+                        }
+                    }
+                    <div class="section-label">轮廓边 <span>点击选择</span></div>
+                    @for (int i = 0; i < entity.EdgeCount; i++)
+                    {
+                        var edge = i;
+                        <button class="edge-row @(edgeIndex == edge ? "selected" : "")" @onclick="() => SelectEdge(selectedSketch!.Id, entity.Id, edge)"><span>@EdgeText(entity, edge)</span><small>@(entity.DimensionedEdges.Contains(edge) ? "驱动尺寸" : "未标注")</small></button>
+                    }
+                    @if (edgeIndex is { } index)
+                    {
+                        @if(entity.DimensionedEdges.Contains(index)) {
+                        <div class="section-label">@EdgeName</div>
+                        
+                            <label class="number-field"><span>@(entity.Kind == "circle" ? "直径" : entity.Kind=="arc"?"半径":"长度")</span><input type="number" min="@(entity.Kind=="circle"?2:1)" max="@(entity.Kind=="circle"?2000:1000)" value="@N(EdgeValue(entity, index))" @onchange="ChangeDimension" /><small>mm</small></label>
+                            <p class="description">驱动尺寸 · 修改后重建后续特征。 标注文字可在画布拖动。</p>
+                        @if(entity.DimensionPlacements.ContainsKey(index)) { <button class="wide-button secondary" @onclick="ResetDimensionPlacement">恢复标注自动位置</button> }
+                        }
+                        @if (editing is not null && !entity.DimensionedEdges.Contains(index)) { <button class="wide-button secondary" @onclick="AddDimension">添加尺寸标注</button> }
+                    }
+                    @if (editing is not null) { <button class="delete-button" @onclick="DeleteProfile">⌫ 删除轮廓</button> }
+                }
+                <div class="info-card"><span>◇ 区域选择</span><p>交叉的线和圆会分割出独立封闭区域。结束草图后，点击需要的区域，Ctrl / Shift 可多选；标注尺寸不再是拉伸或切除的前置条件。</p></div>
+            }
+            @if (editing is null && selectedSketch is not null && regions.Count > 0)
+            {
+                <div class="section-label">封闭区域 <span>@regionKeys.Count / @regions.Count 已选</span></div>
+                <div class="region-actions"><button @onclick="SelectAllRegions">全选区域</button><button @onclick="ClearRegions">清除</button></div>
+                <div class="region-list">
+                @foreach (var r in regions)
+                {
+                    <button class="region-row @(regionKeys.Contains(r.Key) ? "selected" : "")" @onclick="() => ToggleRegion(r.Key)"><span>@(regionKeys.Contains(r.Key) ? "☑" : "□") 区域 @(regions.IndexOf(r) + 1)</span><small>@N(r.Area) mm²</small></button>
+                }
+                </div>
+            }
+        </div>
+    </aside>
+    <footer><span class="status-dot"></span><span class="status-message" role="status">@message</span><div class="footer-right"><button title="导出本次运行的耗时和面片统计，不包含项目模型" @onclick="DownloadPerformanceReport">导出性能记录</button><span>@doc.Sketches.Count 个草图</span><span>@doc.Features.Count 个特征</span><strong>FORMA / CAD</strong></div></footer>
+</div>
+
+@if(showProjects) {
+    <div class="project-dialog-backdrop"><section class="project-dialog" role="dialog" aria-modal="true" aria-label="后端项目">
+        <div class="project-dialog-title"><div><span class="eyebrow">PROJECT LIBRARY</span><h2>打开项目</h2></div><button @onclick="()=>showProjects=false" aria-label="关闭">✕</button></div>
+        <p>项目自动保存到后端，选择后可继续编辑。</p>
+        <div class="project-list">
+            @if(savedProjects.Count==0){<p>暂无已保存项目</p>}
+            @foreach(var item in savedProjects) {
+                <div class="project-library-row"><button class="project-list-item" disabled="@(documentBusy||saving)" @onclick="()=>LoadProject(item.Id)"><strong>@item.Name @(item.Id==projectId?"· 当前":"")</strong><span>@item.Sketches 个草图 · @item.Features 个特征</span><small>@item.SavedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") · 第 @item.Revision 版</small></button><button class="project-library-delete" disabled="@(documentBusy||saving)" title="删除此项目" aria-label="@($"删除项目 {item.Name}")" @onclick="()=>RequestProjectDeletion(item)"><CadIcon Name="delete" /></button></div>
+            }
+        </div>
+        <div class="project-dialog-actions"><label class="file-button">导入本地备份<InputFile OnChange="Open" accept=".json,.cad" disabled="@(documentBusy||saving)" /></label><button disabled="@(documentBusy||saving)" @onclick="DownloadProject">下载当前备份</button><button disabled="@(documentBusy||saving)" @onclick="BeginSaveAs">另存为项目</button></div>
+    </section></div>
+}
+@if(projectNameMode is not null) {
+    <div class="project-dialog-backdrop"><section class="project-dialog project-name-dialog" role="dialog" aria-modal="true" aria-label="@(projectNameMode=="new"?"新建项目":projectNameMode=="rename"?"重命名当前零件":"另存为项目")">
+        <div class="project-dialog-title"><h2>@(projectNameMode=="new"?"新建项目":projectNameMode=="rename"?"重命名当前零件":"另存为项目")</h2><button @onclick="()=>projectNameMode=null" aria-label="关闭">✕</button></div>
+        <label class="field-label" for="project-name">项目名称</label><input id="project-name" class="text-input" @bind="projectNameInput" @bind:event="oninput" maxlength="40" autofocus @onkeydown="ProjectNameKey" />
+        <p>编辑内容会自动保存到后端。</p>
+        <div class="project-dialog-actions"><button disabled="@(documentBusy||saving||string.IsNullOrWhiteSpace(projectNameInput))" @onclick="ConfirmProjectName">@(projectNameMode=="new"?"创建项目":projectNameMode=="rename"?"确认重命名":"另存为")</button><button @onclick="()=>projectNameMode=null">取消</button></div>
+    </section></div>
+}
+@if(deletionPlan is {} removal&&(removal.HasDependents||deletionError is not null)) {
+    <div class="project-dialog-backdrop"><section class="project-dialog" role="dialog" aria-modal="true" aria-label="删除建模对象">
+        <div class="project-dialog-title"><h2>删除 @removal.Label</h2><button aria-label="取消删除" @onclick="()=>deletionPlan=null">✕</button></div>
+        <p>以下依赖项会一起删除，失效的关联约束会解除。可通过撤销恢复。</p><div class="deletion-items">@foreach(var item in removal.AffectedItems){<div>@item</div>}</div>@if(deletionError is not null){<p role="alert">@deletionError</p>}
+        <div class="project-dialog-actions"><button disabled="@(documentBusy||saving)" @onclick="ConfirmTreeDeletion">删除对象及依赖项</button><button @onclick="()=>deletionPlan=null">取消</button></div>
+    </section></div>
+}
+@if(projectToDelete is {} deletingProject){
+    <div class="project-dialog-backdrop"><section class="project-dialog" role="dialog" aria-modal="true" aria-label="删除项目">
+        <div class="project-dialog-title"><h2>删除项目</h2><button aria-label="取消删除" @onclick="()=>projectToDelete=null">✕</button></div>
+        <strong>@deletingProject.Name</strong><p>将删除后端项目及保存备份。项目删除无法通过建模撤销恢复。</p>
+        @if(projectDeleteError is not null){<p role="alert">@projectDeleteError</p>}
+        <div class="project-dialog-actions"><button disabled="@(documentBusy||saving)" @onclick="ConfirmProjectDeletion">确认删除项目</button><button disabled="@(documentBusy||saving)" @onclick="()=>projectToDelete=null">取消</button></div>
+    </section></div>
+}
+@code {
+    CadDocument doc = new();
+    CadProjectSummary? projectToDelete;
+    string? projectDeleteError;
+    CadDeletionPlan? deletionPlan;
+    string? deletionError;
+    bool documentBusy,initializing=true,disposed;
+    bool projectRestoreFailed;
+    bool CanUseBrowser=>!disposed&&CircuitState.IsConnected;
+    string? projectNameMode;
+    string projectNameInput="";
+    Guid projectId=Guid.NewGuid();
+    long serverRevision;
+    string savedSnapshot="";
+    bool saving,pendingSave,storageConflict,requiresRepair,showProjects,protectBrowserDraft;
+    DateTimeOffset? lastSavedAt;
+    string? storageMessage;
+    List<CadProjectSummary> savedProjects=[];
+    string StorageLabel=>projectRestoreFailed?"项目重建失败":saving?"正在保存":storageConflict?"保存冲突":pendingSave||storageMessage is not null?"尚未同步":serverRevision>0?"已保存到后端":"新项目";
+    string? sketchId, profileId, operation;
+    string? historyFeatureId;
+    string? editingFeatureId;
+    bool modelFaceSelected;
+    CadFeature? historyFeature => doc.Features.FirstOrDefault(f => f.Id == historyFeatureId);
+    int? edgeIndex;
+    List<string> regionKeys = [];
+    List<SketchRegionInfo> regions = [];
+    SketchPlane? support;
+    SketchPlane? targetFace;
+    string endCondition = "blind";
+    string featureMode="extrude",axis="Y";
+    double revolveAngle=360,axisOffset;
+    bool rotationAxisSelected,thinWall,pickingRotationAxis;
+    CadModelEdgeReference? axisModelEdge;
+    string? openProfileEntityId;
+    string? sweepPickRole;
+    string pathInterpolation="native",sweepOrientation="follow";
+    double centerPathLength=50,centerPathAngle;
+    double wallThickness=2;
+    string wallSide="center";
+    string? axisEntityId,axisSketchId,pathSketchId,pathEntityId;
+    int axisEdgeIndex;
+    List<CadLoftSection> loftSections=[];
+    List<CadLoftChoice> loftChoices=[];
+    CadChamferEdge? chamferEdge;
+    List<CadChamferEdge> chamferEdges=[];
+    string edgeTreatment="chamfer";
+    double chamferAngle=45;
+    List<CadBodyInfo> bodies=[];
+    string? selectedBodyId;
+    List<double>? selectedFacePoint;
+    CadBodyInfo? selectedBody=>bodies.FirstOrDefault(body=>body.Id==selectedBodyId);
+    bool UseTopologyBevel => featureMode=="chamfer" && edgeTreatment=="chamfer" && chamferEdges.Count>0
+        && chamferEdges.All(edge=>edge.Kind=="line"&&edge.FaceA?.Face?.StartsWith("visual-cap|",StringComparison.Ordinal)!=true&&edge.FaceB?.Face?.StartsWith("visual-cap|",StringComparison.Ordinal)!=true)
+        && (editingFeatureId is null||doc.Features.FirstOrDefault(f=>f.Id==editingFeatureId)?.TopologyBevel==true||!HasEdgeSurfaceReferences(editingFeatureId));
+    CadFeature CurrentFeature()=>new(){Id=editingFeatureId??"preview",Kind=operation??"extrude",Mode=featureMode,SketchId=sketchId??"",RegionKeys=featureMode=="sweep"&&thinWall?new List<string>():regionKeys.ToList(),Depth=distance,EndCondition=endCondition,Reversed=reversed,TargetFace=targetFace,Angle=revolveAngle,Axis=axis,AxisOffset=axisOffset,AxisEntityId=axisEntityId,AxisSketchId=axisSketchId,AxisEdgeIndex=axisEdgeIndex,AxisModelEdge=axisModelEdge,ThinWall=thinWall,OpenProfileEntityId=openProfileEntityId,WallThickness=wallThickness,WallSide=wallSide,PathSketchId=pathSketchId,PathEntityId=pathEntityId,PathInterpolation=pathInterpolation,SweepOrientation=sweepOrientation,Sections=loftSections.Select(s=>new CadLoftSection{SketchId=s.SketchId,RegionKeys=s.RegionKeys.ToList(),Face=s.Face,FaceX=s.FaceX,FaceY=s.FaceY}).ToList(),ChamferEdge=chamferEdge,ChamferEdges=chamferEdges.ToList(),EdgeTreatment=edgeTreatment,ChamferAngle=chamferAngle,AppearanceSourceId=EdgeAppearanceSource(),TopologyBevel=UseTopologyBevel,VisualOnly=!UseTopologyBevel&&featureMode=="chamfer"&&(editingFeatureId is null||doc.Features.FirstOrDefault(f=>f.Id==editingFeatureId)?.VisualOnly==true||!HasEdgeSurfaceReferences(editingFeatureId))};
+    bool reversed, pickingTarget;
+    bool pickingSketchPlane;
+    FeaturePreviewInfo previewState = new();
+    CadSketch? editing => doc.Sketches.FirstOrDefault(s => !s.Finished);
+    CadSketch? selectedSketch => doc.Sketches.FirstOrDefault(s => s.Id == sketchId);
+    SketchEntity? entity => selectedSketch?.Entities.FirstOrDefault(e => e.Id == profileId);
+    bool CanFeature => !pickingSketchPlane && editing is null && operation is null && selectedSketch?.Finished == true && regionKeys.Count > 0;
+    bool CanSweep=>!pickingSketchPlane&&editing is null&&operation is null&&selectedSketch?.Finished==true&&selectedSketch.Entities.Count>0;
+    string SupportName => support is null ? "尚未选择面" : support.SourceSketchId is not null?"截面中心路径平面": support.FeatureId is null ? support.Reference + " 基准面" : (selectedBody?.Name??"实体")+" · " + (support.Face switch { "top" => "端面", "bottom" => "底面", _ => "侧面" });
+    string ProfileName => entity is null ? "未选择" : entity.Kind switch { "circle" => "闭合圆", "slot" => "长圆槽", "ellipse"=>"椭圆","arc"=>"圆弧","polygon"=>"多边形","line" => entity.Construction?"参考线（不参与实体）":"直线", _ => "闭合矩形" };
+    string EdgeName => entity is null || edgeIndex is null ? "尚未选择标注边" : EdgeText(entity, edgeIndex.Value);
+    string Stage => pickingSketchPlane ? "选择草图平面" : editing is not null ? "绘制草图 · 尺寸标注可选" : operation is not null ? "预览并确认特征" : regionKeys.Count > 0 ? $"已选择 {regionKeys.Count} 个封闭区域" : selectedSketch is not null ? "点击交叉轮廓中的封闭区域" : support is not null ? "在选定面上创建草图" : "点击新建草图，开始设计";
+    string StageNumber => editing is not null ? "02" : entity is not null ? "03" : "01";
+    string toolLabel => tool switch { "rectangle" => "矩形", "circle" => "圆", "slot" => "长圆槽", "centerRectangle"=>"中心矩形","circle3"=>"三点圆","ellipse"=>"椭圆","arc"=>"圆心圆弧","polygon"=>"多边形","polyline"=>"连续折线","line" => "直线", "referenceLine"=>"参考线", "dimension" => "选择边标注", _ => "选择" };
+    string tool = "select", message = "空白项目 · 点击新建草图，再选择三维中的草图平面";
+    double distance = 20;
+    int polygonSides=6;
+    int revision;
+    IJSObjectReference? module;
+    DotNetObjectReference<Home>? reference;
+    readonly Stack<string> undo = new(), redo = new();
+    string Snapshot() => JsonSerializer.Serialize(doc);
+    static string N(double n) => n.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+    static string FeatureLimit(CadFeature f) => f.Mode=="chamfer"?(f.VisualOnly?"外观 · ":"")+$"{(f.EdgeTreatment=="fillet"?"R":"距离 ")}{f.Depth:0.##} mm · {Math.Max(1,f.ChamferEdges.Count)} 条边": f.Mode=="revolve"?$"{f.Angle:0.##}°":f.Mode=="loft"?$"{f.Sections.Count+1} 截面":f.Mode=="sweep"?(f.ThinWall?$"薄壁 {f.WallThickness:0.##} mm":"沿路径"):f.EndCondition switch { "throughAll" => "贯穿全部", "upToFace" => "到指定面", _ => $"{f.Depth:0.##} mm" };
+    static string EdgeText(SketchEntity e, int i) => e.Kind=="arc"?"圆弧 · 半径":e.Kind=="polygon"?$"第 {i+1} 条边":e.Kind=="ellipse"?(i==0?"轴向一直径":"轴向二直径"):e.Kind == "circle" ? "圆周 · 直径" : e.Kind == "line" ? "直线 · 长度" : e.Kind == "slot" ? (i==0?"总长":"槽宽") : new[] { "下边 · 宽度", "右边 · 高度", "上边 · 宽度", "左边 · 高度" }[i];
+    static double EdgeValue(SketchEntity e, int i) => e.Kind=="arc"?e.Radius:e.Kind=="polygon"?2*e.Radius*Math.Sin(Math.PI/e.Sides):e.Kind == "circle" ? e.Radius * 2 : e.Kind == "line" ? Math.Sqrt(e.Width*e.Width+e.Height*e.Height) : i % 2 == 0 ? e.Width : e.Height;
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if(!first||!CanUseBrowser)return;
+        try {
+            module=await JS.InvokeAsync<IJSObjectReference>("import","./cad.js");if(!CanUseBrowser)return;reference=DotNetObjectReference.Create(this);
+            await BrowserVoidAsync("init","cad-canvas",reference);
+            await RestoreProject();
+            await Render();if(doc.Sketches.Count>0||doc.Features.Count>0)await Camera(editing is null?"iso":"sketch");RefreshUi();
+        }catch(JSDisconnectedException){CircuitState.MarkDisconnected();}
+        catch(OperationCanceledException) when(!CanUseBrowser){}
+        catch(Exception ex) when(ex is JSException or OperationCanceledException){Logger.LogError(ex,"CAD editor initialization failed");message="视图初始化失败："+ex.Message;}
+        finally{initializing=false;RefreshUi();}
+    }
+    async Task RestoreProject()
+    {
+        if(module is null||!CanUseBrowser)return;
+        var draft=await BrowserAsync<CadProjectDraft?>("readProjectDraft");
+        var active=await BrowserAsync<string?>("activeProject");
+        var idText=draft?.ProjectId??active;
+        CadProject? stored=null;bool backendUnavailable=false,discardDeletedDraft=false;
+        try{
+            if(Guid.TryParse(idText,out var id)&&id!=Guid.Empty){projectId=id;stored=await Projects.LoadAsync(id);
+                if(stored is null&&await Projects.IsDeletedAsync(id)){
+                    discardDeletedDraft=true;draft=null;await BrowserVoidAsync("forgetProject",id.ToString("D"));
+                    var latest=(await Projects.ListAsync()).FirstOrDefault();projectId=latest?.Id??Guid.NewGuid();if(latest is not null)stored=await Projects.LoadAsync(latest.Id);
+                    message="原项目已删除，已清理旧草稿引用";
+                }}
+            else{var latest=(await Projects.ListAsync()).FirstOrDefault();if(latest is not null){projectId=latest.Id;stored=await Projects.LoadAsync(latest.Id);}}
+        }catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException){Logger.LogError(ex,"CAD backend restore failed");storageMessage="后端项目暂时无法读取，浏览器备份仍保留。";backendUnavailable=true;}
+        CadDocument? local=null;
+        try{
+            var raw=discardDeletedDraft?null:(draft?.Json??await BrowserAsync<string?>("readDraft"));
+            if(!string.IsNullOrWhiteSpace(raw)){local=JsonSerializer.Deserialize<CadDocument>(raw)??throw new ArgumentException("草稿为空。");local.Validate();}
+        }catch(Exception ex) when(ex is JsonException or ArgumentException){protectBrowserDraft=!await BrowserAsync<bool>("preserveRecoveryDraft");Logger.LogWarning(ex,"CAD browser draft is invalid");message="浏览器草稿无效，尝试恢复后端项目。";}
+        var recoverLocal=local is not null&&(stored is null||draft is null||draft.Dirty);
+        if(stored is not null&&local is not null&&JsonSerializer.Serialize(stored.Document)==JsonSerializer.Serialize(local))recoverLocal=false;
+        if(recoverLocal){
+            try{
+                await BrowserVoidAsync("prepareLoadedDocument",local);doc=local!;
+                var sameVersion=stored is not null&&draft is not null&&Guid.TryParse(draft.ProjectId,out var draftId)&&draftId==stored.Id&&draft.ServerRevision==stored.Revision;
+                if(sameVersion){projectId=stored!.Id;serverRevision=stored.Revision;requiresRepair=stored.RecoveredBackup;}
+                else if(backendUnavailable&&draft is not null&&Guid.TryParse(draft.ProjectId,out var offlineId)){projectId=offlineId;serverRevision=draft.ServerRevision;}
+                else{projectId=Guid.NewGuid();serverRevision=0;}
+                pendingSave=true;ResetSelection();
+                message=stored is not null&&!sameVersion?"未同步草稿已恢复为独立项目，原后端项目没有被覆盖":"已恢复最近草稿";
+                if(!backendUnavailable)await Checkpoint();return;
+            }catch(OperationCanceledException) when(!CanUseBrowser){return;}
+            catch(Exception ex) when(ex is ArgumentException or JSException or OperationCanceledException){protectBrowserDraft=!await BrowserAsync<bool>("preserveRecoveryDraft");Logger.LogWarning(ex,"CAD browser geometry could not be restored");message="本地草稿无法重建，备份已保留。";projectRestoreFailed=true;}
+        }
+        if(stored is not null){
+            try{
+                await BrowserVoidAsync("prepareLoadedDocument",stored.Document);doc=stored.Document;projectId=stored.Id;serverRevision=stored.Revision;lastSavedAt=stored.SavedAt;savedSnapshot=Snapshot();pendingSave=false;projectRestoreFailed=false;storageConflict=false;requiresRepair=stored.RecoveredBackup;ResetSelection();
+                storageMessage=null;message=stored.RecoveredBackup?"已从后端上一版恢复项目":"已恢复后端项目";
+                await WriteProjectDraft(false);if(requiresRepair)await SaveToBackend();
+            }catch(OperationCanceledException) when(!CanUseBrowser){return;}
+            catch(Exception ex) when(ex is ArgumentException or JSException or OperationCanceledException){Logger.LogError(ex,"CAD backend geometry could not be restored");storageMessage="后端项目重建失败，原文件保留。可以新建或打开其他项目。原因："+ex.Message;projectRestoreFailed=true;storageConflict=false;}
+        }
+    }
+    async Task WriteProjectDraft(bool dirty)
+    {
+        if(module is null||!CanUseBrowser||projectRestoreFailed)return;
+        try{
+            await BrowserAsync<bool>("rememberProject",projectId.ToString("D"));
+            var written=!protectBrowserDraft&&await BrowserAsync<bool>("writeProjectDraft",new CadProjectDraft{ProjectId=projectId.ToString("D"),ServerRevision=serverRevision,Dirty=dirty,Json=Snapshot()});
+            if(!written&&dirty)message+=" · 浏览器备份未完成";
+        }catch(OperationCanceledException) when(!CanUseBrowser){}
+        catch(Exception ex) when(ex is JSException or OperationCanceledException){Logger.LogWarning(ex,"CAD local checkpoint unavailable");}
+    }
+    async Task Checkpoint(){pendingSave=Snapshot()!=savedSnapshot;await WriteProjectDraft(pendingSave);await SaveToBackend();}
+    async Task<bool> SaveToBackend()
+    {
+        if(saving||storageConflict||projectRestoreFailed)return false;
+        var snapshot=Snapshot();
+        if(serverRevision>0&&snapshot==savedSnapshot&&!requiresRepair){pendingSave=false;return true;}
+        saving=true;pendingSave=true;RefreshUi();
+        try{
+            var copy=JsonSerializer.Deserialize<CadDocument>(snapshot)??throw new ArgumentException("项目内容为空。");
+            var saved=await Projects.SaveAsync(projectId,serverRevision,copy);
+            serverRevision=saved.Revision;lastSavedAt=saved.SavedAt;savedSnapshot=snapshot;pendingSave=false;requiresRepair=false;storageMessage=null;
+            await WriteProjectDraft(false);return true;
+        }catch(CadProjectConflictException ex){storageConflict=true;storageMessage=ex.Message;return false;}
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or ArgumentException or JsonException){Logger.LogError(ex,"CAD backend save failed for {ProjectId}",projectId);storageMessage=ex is ArgumentException?ex.Message:"后端保存失败，当前修改保留在浏览器草稿中。请重试保存或另存为。";return false;}
+        finally{saving=false;RefreshUi();}
+    }
+    async Task Render()
+    {
+        if(module is null||!CanUseBrowser)return;
+        try
+        {
+            var info = await BrowserAsync<SceneUpdateInfo>("update", doc, new { sketchId, profileId, edgeIndex, regionKeys, support, editingId = editing?.Id, editingFeatureId, tool, operation, distance, endCondition, reversed, targetFace, pickingTarget, pickingSketchPlane, polygonSides, featureMode, rotationAxisSelected, pickingRotationAxis, pickingSweepProfile=featureMode=="sweep"&&sweepPickRole=="profile", pickingSweepPath=featureMode=="sweep"&&sweepPickRole=="path", selectedBodyId,selectedFacePoint,featureDraft=CurrentFeature() });
+            regions = info.Regions; previewState = info.Preview;bodies=info.Bodies;if(selectedBodyId is not null&&!bodies.Any(body=>body.Id==selectedBodyId))selectedBodyId=null;
+            regionKeys.RemoveAll(key => !regions.Any(r => r.Key == key));
+        }
+        catch(OperationCanceledException) when(!CanUseBrowser){}
+        catch (Exception ex) when(ex is JSException or OperationCanceledException) { Logger.LogError(ex,"CAD view rebuild failed; last scene retained");message = "几何重建失败，保留上次画面：" + ex.Message; }
+    }
+    bool EditingBlocked()
+    {
+        if(!CanUseBrowser)return true;
+        if(!initializing&&!documentBusy&&!saving)return false;
+        message=initializing?"正在准备编辑视图，请稍候":"上一项修改仍在处理中，请稍后再操作";return true;
+    }
+    async Task<bool> Mutate(Action action,string success,SketchEditIntent? intent=null)
+    {
+        if(EditingBlocked())return false;
+        documentBusy=true;
+        try{return await MutateCore(action,success,intent);}
+        finally{documentBusy=false;}
+    }
+    async Task<bool> MutateCore(Action action, string success,SketchEditIntent? intent)
+    {
+        var before = Snapshot();
+        var oldSketch = sketchId; var oldProfile = profileId; var oldEdge = edgeIndex;
+        var oldSupport = support; var oldTool = tool; var oldOperation = operation;
+        var oldRegions = regionKeys.ToList();
+        var oldEndCondition=endCondition;var oldReversed=reversed;var oldTarget=targetFace;var oldPicking=pickingTarget;
+        var oldPlanePicking=pickingSketchPlane;
+        var oldFaceSelected=modelFaceSelected;var oldHistoryFeature=historyFeatureId;
+        var oldEditingFeature=editingFeatureId;
+        try { action();doc.Validate(); if(module is not null) {
+                var adjustments=await BrowserAsync<List<ModelDimensionAdjustment>>("prepareDocument",doc,profileId,intent);
+                foreach(var change in adjustments) {var target=doc.Sketches.First(s=>s.Id==change.SketchId).Entities.First(e=>e.Id==change.EntityId);target.X=change.X;target.Y=change.Y;target.Width=change.Width;target.Height=change.Height;target.Radius=change.Radius;}
+                doc.Validate();
+            } undo.Push(before); redo.Clear(); message = success; revision++; await Render();await Checkpoint(); return true; }
+        catch (Exception ex) when (ex is ArgumentException or JSException or OperationCanceledException)
+        {
+            Logger.LogWarning(ex,"CAD edit rejected; restoring previous document");
+            doc = JsonSerializer.Deserialize<CadDocument>(before)!;
+            sketchId = oldSketch; profileId = oldProfile; edgeIndex = oldEdge;
+            support = oldSupport; tool = oldTool; operation = oldOperation;
+            regionKeys = oldRegions;
+            endCondition=oldEndCondition;reversed=oldReversed;targetFace=oldTarget;pickingTarget=oldPicking;
+            pickingSketchPlane=oldPlanePicking;
+            modelFaceSelected=oldFaceSelected;historyFeatureId=oldHistoryFeature;
+            editingFeatureId=oldEditingFeature;
+            message = ex.Message; revision++; await Render(); return false;
+        }
+    }
+    async Task SelectPlane(string plane)
+    {
+        if (editing is not null || operation is not null || !pickingSketchPlane) return;
+        if (plane is not ("XY" or "XZ" or "YZ")) return;
+        support = new() { Reference = plane }; sketchId = profileId = null; edgeIndex = null; regionKeys.Clear();
+        modelFaceSelected=false;historyFeatureId=null;
+        await CreateSketchOnSupport();
+    }
+    [JSInvokable] public async Task PickSketchPlane(string plane) { if(!pickingSketchPlane)return;await SelectPlane(plane);RefreshUi(); }
+    [JSInvokable] public async Task SelectFace(string featureId, string face)
+    {
+        if (editing is not null || operation is not null) return;
+        if (face == "curved") { message = "曲面不能作为草图平面，请选择平面。"; RefreshUi(); return; }
+        if (!doc.Features.Any(f => f.Id == featureId)) return;
+        support = new() { FeatureId = featureId, Face = face }; sketchId = profileId = null; edgeIndex = null; regionKeys.Clear();
+        modelFaceSelected=true;historyFeatureId=featureId;
+        if(pickingSketchPlane) await CreateSketchOnSupport();
+        else { message="实体与当前面已选中 · 浅蓝填充及亮蓝边界为新草图承载面";await Render(); }
+        RefreshUi();
+    }
+    async Task ToggleSketchEditing(){
+        if(operation is not null||documentBusy||initializing)return;
+        if(editing is not null){await FinishSketch();return;}
+        if(pickingSketchPlane){await CancelSketchPlanePick();return;}
+        if(!modelFaceSelected&&selectedSketch?.Finished==true)await EditSketch();else await BeginSketch();
+    }
+    async Task BeginSketch()
+    {
+        if (editing is not null || operation is not null || pickingSketchPlane) return;
+        if(modelFaceSelected && support?.FeatureId is { } faceFeature && doc.Features.Any(f=>f.Id==faceFeature))
+        {
+            pickingSketchPlane=true;
+            await CreateSketchOnSupport();
+            return;
+        }
+        modelFaceSelected=false;historyFeatureId=null;
+        pickingSketchPlane=true;support=null;sketchId=profileId=null;edgeIndex=null;regionKeys.Clear();tool="select";
+        message="请选择三维中的彩色网格面，或已有实体的平面";await Render();await Camera("planes");
+    }
+    async Task CreateSketchOnSupport()
+    {
+        if(support is null || editing is not null || !pickingSketchPlane)return;
+        var created=await Mutate(() => { var s = new CadSketch { Name = $"草图 {doc.Sketches.Count + 1:00}", Plane = JsonSerializer.Deserialize<SketchPlane>(JsonSerializer.Serialize(support))! }; doc.Sketches.Add(s);sketchId=s.Id;profileId=null;edgeIndex=null;regionKeys.Clear();tool="select";pickingSketchPlane=false;modelFaceSelected=false;historyFeatureId=null; },"草图已创建并正对承载面 · 中键可随时旋转，顶部视图工具可重新对齐");
+        if(created)await Camera("sketch");
+    }
+    async Task CancelSketchPlanePick() {pickingSketchPlane=false;support=null;modelFaceSelected=false;historyFeatureId=null;message="已取消新建草图";await Render();}
+    async Task FinishSketch()
+    {
+        if (editing is not { } s) return;
+        if(s.Entities.Count==0&&!doc.Features.Any(feature=>feature.SketchId==s.Id)){
+            await Mutate(()=>{doc.Sketches.Remove(s);sketchId=profileId=null;edgeIndex=null;regionKeys.Clear();support=null;tool="select";historyFeatureId=null;modelFaceSelected=false;},"已完成编辑，未绘制图形，不保留空草图");return;
+        }
+        await Mutate(() => { s.Finished = true; tool = "select"; profileId = null; edgeIndex = null; regionKeys.Clear(); }, "草图已结束 · 点击封闭区域即可拉伸或切除，Ctrl / Shift 加选");
+    }
+    async Task SelectSketch(string id)
+    {
+        if (editing is not null || operation is not null || pickingSketchPlane) return;
+        modelFaceSelected=false;historyFeatureId=null;
+        sketchId = id; profileId = null; edgeIndex = null; regionKeys.Clear(); support = selectedSketch?.Plane; message = "草图已选中 · 点击封闭区域，Ctrl / Shift 可加选"; await Render();
+    }
+    async Task ResetDimensionPlacement()
+    {
+        if(operation is not null || entity is not {} e || edgeIndex is not {} index)return;
+        await Mutate(()=>e.DimensionPlacements.Remove(index),"标注已恢复自动排布");
+    }
+    async Task SelectEditingEntity(ChangeEventArgs args)
+    {
+        if(editing is {} sketch && args.Value?.ToString() is {} id)await SelectProfile(sketch.Id,id);
+    }
+    async Task ToggleSketchVisibility(string id)
+    {
+        if(operation is not null || pickingSketchPlane || editing?.Id==id)return;
+        var sketch=doc.Sketches.FirstOrDefault(s=>s.Id==id);if(sketch is null)return;
+        await Mutate(()=>sketch.Hidden=!sketch.Hidden,sketch.Hidden?"草图已显示":"草图已隐藏，实体特征保持不变");
+    }
+    [JSInvokable] public async Task MoveDimension(string sid,string pid,int edge,double x,double y)
+    {
+        if(operation is not null || pickingSketchPlane || (editing is not null && editing.Id!=sid))return;
+        var sketch=doc.Sketches.FirstOrDefault(s=>s.Id==sid);var e=sketch?.Entities.FirstOrDefault(e=>e.Id==pid);
+        if(e is null || (edge < -1&&!e.ModelDimensions.Any(d=>d.Index==edge)) || edge>=e.EdgeCount || (edge==-1&&e.ReferenceLineId is null))return;
+        await Mutate(()=>{e.DimensionPlacements[edge]=new(){X=x,Y=y};sketchId=sid;profileId=pid;edgeIndex=edge>=0?edge:null;support=sketch!.Plane;historyFeatureId=null;modelFaceSelected=false;},"标注位置已更新");
+        RefreshUi();
+    }
+    async Task<List<string>> RegionKeysForEntity(string sid,string pid)
+    {
+        if(module is null||!CanUseBrowser)return [];
+        try{return await BrowserAsync<List<string>>("regionsForEntity",sid,pid);}
+        catch(Exception ex) when(ex is JSException or OperationCanceledException){Logger.LogWarning(ex,"CAD region selection failed");message="区域选择失败："+ex.Message;return [];}
+    }
+    async Task SelectHistoryFeature(string id)
+    {
+        if(editing is not null || operation is not null || pickingSketchPlane)return;
+        var feature=doc.Features.FirstOrDefault(f=>f.Id==id);if(feature is null)return;
+        await SelectSketch(feature.SketchId);historyFeatureId=id;
+    }
+    async Task SelectHistoryEntity((string SketchId,string EntityId) item) => await SelectProfile(item.SketchId,item.EntityId);
+    async Task EditHistorySketch(string id)
+    {
+        if(operation is not null || pickingSketchPlane || (editing is not null && editing.Id!=id))return;
+        if(editing?.Id==id){await Camera("sketch");return;}
+        await SelectSketch(id);await EditSketch();
+    }
+    async Task EditHistoryEntity((string SketchId,string EntityId) item)
+    {
+        if(operation is not null || pickingSketchPlane || (editing is not null && editing.Id!=item.SketchId))return;
+        await EditHistorySketch(item.SketchId);await SelectProfile(item.SketchId,item.EntityId);
+    }
+    async Task EditHistoryDimension((string SketchId,string EntityId,int Edge) item)
+    {
+        if(item.Edge < -1)await SelectProfile(item.SketchId,item.EntityId);else await SelectEdge(item.SketchId,item.EntityId,item.Edge);
+        message="直接修改右侧标注尺寸，已完成的特征会同步重建";
+    }
+    async Task EditHistoryFeature(string id)
+    {
+        if(operation is not null || editing is not null || pickingSketchPlane)return;
+        var feature=doc.Features.FirstOrDefault(f=>f.Id==id);if(feature is null)return;
+        editingFeatureId=id;historyFeatureId=id;sketchId=feature.SketchId;profileId=null;edgeIndex=null;support=selectedSketch?.Plane;modelFaceSelected=false;
+        regionKeys=feature.RegionKeys.ToList();
+        if(feature.Mode!="chamfer"&&!feature.ThinWall&&regionKeys.Count==0 && module is not null)regionKeys=await RegionKeysForEntity(feature.SketchId,feature.ProfileId);
+        featureMode=feature.Mode;thinWall=feature.ThinWall;openProfileEntityId=feature.OpenProfileEntityId;wallThickness=feature.WallThickness;wallSide=feature.WallSide;rotationAxisSelected=feature.Mode=="revolve";revolveAngle=feature.Angle;axis=feature.Axis;axisOffset=feature.AxisOffset;axisEntityId=feature.AxisEntityId;axisSketchId=feature.AxisSketchId;axisEdgeIndex=feature.AxisEdgeIndex;axisModelEdge=feature.AxisModelEdge;pickingRotationAxis=false;pathSketchId=feature.PathSketchId;pathEntityId=feature.PathEntityId;pathInterpolation=feature.PathInterpolation;sweepOrientation=feature.SweepOrientation;chamferEdge=feature.ChamferEdge;chamferEdges=feature.ChamferEdges.Count>0?feature.ChamferEdges.ToList():feature.ChamferEdge is {} oldEdge?new(){oldEdge}:new();edgeTreatment=feature.EdgeTreatment;chamferAngle=feature.ChamferAngle;loftSections=JsonSerializer.Deserialize<List<CadLoftSection>>(JsonSerializer.Serialize(feature.Sections))!;
+        if(featureMode is "loft" or "sweep")await RefreshLoftChoices();sweepPickRole=null;SyncCenterPathParameters();
+        operation=feature.Kind;distance=feature.Depth;endCondition=feature.EndCondition;reversed=feature.Reversed;targetFace=feature.TargetFace;pickingTarget=false;
+        message="正在编辑历史特征 · 确认后重建后续步骤";await Render();
+    }
+    async Task SelectProfile(string sid, string pid)
+    {
+        if (operation is not null || pickingSketchPlane || (editing is not null && editing.Id != sid)) return;
+        if (!doc.Sketches.Any(s => s.Id == sid && s.Entities.Any(e => e.Id == pid))) return;
+        modelFaceSelected=false;historyFeatureId=null;
+        sketchId = sid; profileId = pid; support = selectedSketch?.Plane;
+        edgeIndex=entity?.DisplayEdges.FirstOrDefault();
+        if (editing is null && module is not null) regionKeys = await RegionKeysForEntity(sid,pid);
+        message = editing is null ? (regionKeys.Count>0?"已选择该图元内的封闭区域 · 可在画布单选局部区域或加选":"已选择开放图元 · 可作为扫描路径，或使用薄壁扫描截面") : "已选择图元 · 尺寸标注可选"; await Render();
+    }
+    [JSInvokable] public async Task PickProfile(string sid, string pid) { await SelectProfile(sid,pid); RefreshUi(); }
+    [JSInvokable] public async Task PickRegions(string sid, List<string> keys)
+    {
+        if (editing is not null || pickingSketchPlane || keys.Count > 500 || (operation is not null && sketchId != sid&&!(featureMode=="sweep"&&sweepPickRole=="profile"&&sid!=pathSketchId))) return;
+        var sketch = doc.Sketches.FirstOrDefault(s => s.Id == sid && s.Finished);
+        if (sketch is null) return;
+        modelFaceSelected=false;historyFeatureId=null;
+        sketchId = sid; profileId = null; edgeIndex = null; support = sketch.Plane;
+        regionKeys = keys.Distinct().ToList();
+        if(operation is not null&&featureMode=="sweep"){thinWall=false;sweepPickRole=pathSketchId is null?"path":null;}
+        message = regionKeys.Count == 0 ? "已清除区域选择" : $"已选择 {regionKeys.Count} 个封闭区域 · 可直接拉伸或切除";
+        await Render(); RefreshUi();
+    }
+    async Task ToggleRegion(string key)
+    {
+        if (editing is not null || !regions.Any(r => r.Key == key)) return;
+        if (!regionKeys.Remove(key)) regionKeys.Add(key);
+        message = $"已选择 {regionKeys.Count} 个封闭区域"; await Render();
+    }
+    async Task SelectAllRegions() { regionKeys = regions.Select(r => r.Key).ToList(); message = $"已选择全部 {regionKeys.Count} 个区域"; await Render(); }
+    async Task ClearRegions() { regionKeys.Clear(); message = "已清除区域选择"; await Render(); }
+    [JSInvokable] public async Task CanvasEscape()
+    {
+        if(pickingSketchPlane)await CancelSketchPlanePick();
+        else if (pickingTarget) { pickingTarget=false; message="已退出终止面拾取"; await Render(); }
+        else if (operation is not null) await CancelFeature(); else await SetTool("select");
+        RefreshUi();
+    }
+    async Task SelectEdge(string sid, string pid, int edge)
+    {
+        if (operation is not null || (editing is not null && editing.Id != sid)) return;
+        var target = doc.Sketches.FirstOrDefault(s => s.Id == sid)?.Entities.FirstOrDefault(e => e.Id == pid);
+        if (target is null || edge < 0 || edge >= target.EdgeCount) return;
+        if (profileId != pid || sketchId != sid) { await SelectProfile(sid,pid); }
+        edgeIndex = edge;
+        message = entity?.DimensionedEdges.Contains(edge) == true ? "已选择驱动尺寸 · 双击画布数字可修改" : "已选择未标注的边 · 参数可在属性中修改，标注后才锁定尺寸";await Render();
+    }
+    [JSInvokable] public async Task PickEdge(string sid, string pid, int edge) { await SelectEdge(sid,pid,edge); RefreshUi(); }
+    async Task EditSketch()
+    {
+        if (selectedSketch is not { Finished: true } s || editing is not null || operation is not null) return;
+        var entered=await Mutate(() => { s.Finished = false;s.Hidden=false; support = s.Plane; tool = "select";profileId=s.Entities.Any(e=>e.Id==profileId)?profileId:s.Entities.FirstOrDefault()?.Id;edgeIndex=entity?.DisplayEdges.FirstOrDefault();historyFeatureId=null; }, "进入草图编辑 · 修改标注尺寸会同步重建依赖特征");
+        if(entered)await Camera("sketch");
+    }
+    [JSInvokable] public async Task AddEntity(string kind, double x, double y, double w, double h,List<CoincidentConstraint> coincidences,double angle,bool construction)
+    {
+        if (editing is not { } s || kind is not ("rectangle" or "circle" or "slot" or "line" or "ellipse")) return;
+        await Mutate(() => { var e = new SketchEntity { Kind=kind, X=x, Y=y, Width=kind=="line"?w:Math.Max(1,w), Height=kind=="line"?h:Math.Max(1,h), Radius=Math.Max(1,w), Construction=kind=="line"&&construction,Coincidences=coincidences,Angle=kind=="slot"?angle:0 }; s.Entities.Add(e); sketchId=s.Id; profileId=e.Id; edgeIndex=0;tool=kind=="line"?(construction?"referenceLine":"line"):"select"; }, "图元已绘制 · 直接拖边或控制点，按锚点和约束缩放／移动"); RefreshUi();
+    }
+    async Task SetTool(string value) { if(operation is not null || (value != "select" && editing is null)) return; tool=value; message = value == "dimension" ? "点选一条边预览尺寸，再选第二条边切换为间距；点空白放置并输入，Esc 取消" : value == "select" ? "选择面、闭合轮廓或边" : value=="slot"?"从槽中心拖动，确定方向与总长；槽宽可在属性中调整":value switch {"circle3"=>"依次点击圆上的三个点","arc"=>"依次点击圆心、起点、逆时针终点","polygon"=>"点击中心，再点击顶点；边数在右侧设置","polyline"=>"依次点击端点，吸附首点闭合；Esc 停止连续绘制","ellipse"=>"从椭圆中心拖动，确定两个方向的直径","centerRectangle"=>"从矩形中心拖向角点",_=>"在草图平面拖动绘制闭合轮廓"}; await Render(); }
+    async Task SetPolygonSides(ChangeEventArgs args){if(int.TryParse(args.Value?.ToString(),out var sides)&&sides>=3&&sides<=12){polygonSides=sides;await Render();}}
+    [JSInvokable] public async Task<string?> AddSketchEntity(string requestedTool,SketchEntity value){
+        var sketch=editing;
+        var expected=requestedTool switch {"circle3"=>"circle","polyline"=>"line","arc"=>"arc","polygon"=>"polygon",_=>""};
+        if(sketch is null||tool!=requestedTool||value.Kind!=expected||expected=="")return "当前绘图工具已改变。";
+        var ok=await Mutate(()=>{sketch.Entities.Add(value);sketchId=sketch.Id;profileId=value.Id;edgeIndex=0;},"图形已绘制 · 可继续绘制，Esc 结束当前步骤");
+        RefreshUi();return ok?null:message;
+    }
+    async Task AddDimension()
+    {
+        if (editing is null || entity is not { } e || edgeIndex is not { } i) return;
+        await Mutate(() => { if(!e.DimensionedEdges.Contains(i)) e.DimensionedEdges.Add(i); }, "尺寸标注已添加 · 在右侧输入尺寸值");
+    }
+    async Task ChangeDimension(ChangeEventArgs args)
+    {
+        if(selectedSketch is not {} s || entity is not {} e || edgeIndex is not {} index)return;
+        if(!double.TryParse(args.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value)||!double.IsFinite(value)){message="请输入有效尺寸。";revision++;return;}
+        await ApplyDimensionValue(s.Id,e.Id,index,value);
+    }
+    async Task<bool> ApplyDimensionValue(string sid,string pid,int edge,double value)
+    {
+        if(operation is not null||pickingSketchPlane||pickingTarget||(editing is not null&&editing.Id!=sid)){message="请先结束当前操作再修改尺寸。";return false;}
+        var sketch=doc.Sketches.FirstOrDefault(s=>s.Id==sid);var e=sketch?.Entities.FirstOrDefault(e=>e.Id==pid);
+        if(e is null||(edge < -1&&!e.ModelDimensions.Any(d=>d.Index==edge))||edge>=e.EdgeCount||(edge==-1&&e.ReferenceLineId is null)){message="标注来源已失效。";return false;}
+        if(!double.IsFinite(value)){message="请输入有效尺寸。";return false;}
+        if(edge>=0&&!e.DimensionedEdges.Contains(edge)){message="此尺寸尚未标注，请在图元属性中修改参数，或明确添加尺寸标注。";return false;}
+        return await Mutate(()=>{
+            if(edge < -1) {if(value<0)throw new ArgumentException("边间距不能小于 0 mm。");e.ModelDimensions.First(d=>d.Index==edge).Distance=value;}
+            else if(edge==-1)e.ReferenceOffset=value;
+            else {
+                var anchor=e.Anchor();
+                if(e.Kind=="circle")e.Radius=value/2;else if(e.Kind=="arc")e.Radius=value;else if(e.Kind=="polygon")e.Radius=value/(2*Math.Sin(Math.PI/e.Sides));
+                else if(e.Kind=="line"){if(value<1)throw new ArgumentException("直线长度至少为 1 mm。");var length=EdgeValue(e,0);e.Width*=value/length;e.Height*=value/length;}
+                else if(edge%2==0)e.Width=value;else e.Height=value;
+                e.KeepAnchor(anchor);
+            }
+            sketchId=sid;profileId=pid;edgeIndex=edge>=0?edge:null;support=sketch!.Plane;historyFeatureId=null;modelFaceSelected=false;
+        },"标注尺寸已更新 · 后续特征已重建");
+    }
+    [JSInvokable] public async Task<string?> EditDimensionValue(string sid,string pid,int edge,double value)
+    {
+        var success=await ApplyDimensionValue(sid,pid,edge,value);RefreshUi();return success?null:message;
+    }
+    [JSInvokable] public async Task<string?> CreatePlacedDimension(string sid,string pid,int edge,ModelEdgeDimension? pair,double offsetX,double offsetY,double value)
+    {
+        var sketch=editing;var target=sketch?.Entities.FirstOrDefault(candidate=>candidate.Id==pid);
+        if(sketch?.Id!=sid||tool!="dimension"||target is null)return "请在当前草图中选择边。";
+        var ok=await Mutate(()=>{
+            if(!double.IsFinite(value)||!double.IsFinite(offsetX)||!double.IsFinite(offsetY))throw new ArgumentException("请输入有效尺寸。");
+            var index=edge;
+            if(pair is not null){
+                if(value<0||!target.IsStraightEdge(pair.Edge))throw new ArgumentException("请选择有效直边，距离不能小于零。");
+                var reference=pair.ReferenceEntityId is null?null:sketch.Entities.FirstOrDefault(candidate=>candidate.Id==pair.ReferenceEntityId);
+                if(pair.ReferenceEntityId is not null&&(reference is null||!reference.IsStraightEdge(pair.ReferenceEdge)||(reference.Id==pid&&pair.ReferenceEdge==pair.Edge)))throw new ArgumentException("请选择两条不同的草图直边。");
+                if(target.ModelDimensions.Any(d=>d.Edge==pair.Edge&&d.ReferenceEntityId==pair.ReferenceEntityId&&(pair.ReferenceEntityId is not null?d.ReferenceEdge==pair.ReferenceEdge:d.ReferenceFace.FeatureId==pair.ReferenceFace.FeatureId&&d.ReferenceFace.Face==pair.ReferenceFace.Face))||(reference?.ModelDimensions.Any(d=>d.Edge==pair.ReferenceEdge&&d.ReferenceEntityId==pid&&d.ReferenceEdge==pair.Edge)??false))throw new ArgumentException("两条边已有标注，请双击原标注修改。");
+                index=target.ModelDimensions.Count==0?-2:target.ModelDimensions.Min(d=>d.Index)-1;
+                pair.Index=index;pair.Distance=value;target.ModelDimensions.Add(pair);
+            } else {
+                if(edge<0||edge>=target.EdgeCount||value<1)throw new ArgumentException("请选择有效草图边，尺寸至少为 1 mm。");
+                if(target.DimensionedEdges.Contains(edge))throw new ArgumentException("该边已有标注，请双击原标注修改。");
+                var anchor=target.Anchor();
+                if(target.Kind=="circle")target.Radius=value/2;else if(target.Kind=="arc")target.Radius=value;else if(target.Kind=="polygon")target.Radius=value/(2*Math.Sin(Math.PI/target.Sides));
+                else if(target.Kind=="line"){var length=EdgeValue(target,0);target.Width*=value/length;target.Height*=value/length;}
+                else if(edge%2==0)target.Width=value;else target.Height=value;
+                target.KeepAnchor(anchor);target.DimensionedEdges.Add(edge);
+            }
+            target.DimensionPlacements[index]=new(){X=offsetX,Y=offsetY};
+            sketchId=sid;profileId=pid;edgeIndex=pair is null?edge:null;support=sketch.Plane;
+        },"尺寸已标注 · 可以继续选择新的边");
+        RefreshUi();return ok?null:message;
+    }
+    [JSInvokable] public async Task<string?> AddModelDimension(string sid,string pid,int edge,SketchPlane referenceFace,double distance,int side)
+    {
+        var sketch=editing;var e=sketch?.Entities.FirstOrDefault(e=>e.Id==pid);
+        if(sketch?.Id!=sid||tool!="dimension"||e is null||!e.IsStraightEdge(edge))return "请选择草图直边与已有实体直边";
+        var ok=await Mutate(()=>{
+            if(e.ModelDimensions.Any(d=>d.ReferenceEntityId is null&&d.Edge==edge&&d.ReferenceFace.FeatureId==referenceFace.FeatureId&&d.ReferenceFace.Face==referenceFace.Face))throw new ArgumentException("这两条边已有距离标注，可双击数字修改。");
+            var index=e.ModelDimensions.Count==0?-2:e.ModelDimensions.Min(d=>d.Index)-1;
+            e.ModelDimensions.Add(new(){Index=index,Edge=edge,ReferenceFace=referenceFace,Distance=distance,Side=side});
+            sketchId=sid;profileId=pid;edgeIndex=null;support=sketch.Plane;
+        },"实体边间距已标注 · 双击数字可修改，拖动文字可调整位置");
+        RefreshUi();return ok?null:message;
+    }
+    [JSInvokable] public async Task<string?> AddSketchDimension(string sid,string pid,int edge,string referenceId,int referenceEdge,double distance,int side)
+    {
+        var sketch=editing;var e=sketch?.Entities.FirstOrDefault(e=>e.Id==pid);var reference=sketch?.Entities.FirstOrDefault(e=>e.Id==referenceId);
+        if(sketch?.Id!=sid||tool!="dimension"||e is null||reference is null||!e.IsStraightEdge(edge)||!reference.IsStraightEdge(referenceEdge)||(pid==referenceId&&edge==referenceEdge))return "请选择两条不同的草图直线边";
+        var ok=await Mutate(()=>{
+            if(e.ModelDimensions.Any(d=>d.Edge==edge&&d.ReferenceEntityId==referenceId&&d.ReferenceEdge==referenceEdge)||reference.ModelDimensions.Any(d=>d.Edge==referenceEdge&&d.ReferenceEntityId==pid&&d.ReferenceEdge==edge))throw new ArgumentException("这两条线已有间距，可双击数字修改。");
+            var index=e.ModelDimensions.Count==0?-2:e.ModelDimensions.Min(d=>d.Index)-1;
+            e.ModelDimensions.Add(new(){Index=index,Edge=edge,ReferenceEntityId=referenceId,ReferenceEdge=referenceEdge,Distance=distance,Side=side});
+            sketchId=sid;profileId=pid;edgeIndex=null;support=sketch.Plane;
+        },"两条草图线的间距已标注 · 双击数字修改距离");
+        RefreshUi();return ok?null:message;
+    }
+    async Task ChangeModelDistance(int index,ChangeEventArgs args)
+    {
+        if(selectedSketch is not {} sketch||entity is not {} e)return;
+        if(!double.TryParse(args.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value))return;
+        await ApplyDimensionValue(sketch.Id,e.Id,index,value);
+    }
+    async Task RemoveModelDimension(int index)
+    {
+        if(editing is null||entity is not {} e)return;
+        await Mutate(()=>{e.ModelDimensions.RemoveAll(d=>d.Index==index);e.DimensionPlacements.Remove(index);},"已解除两线距离约束");
+    }
+    async Task ChangeEntityParameter(string field,ChangeEventArgs args)
+    {
+        if(operation is not null||pickingSketchPlane||entity is not {} e)return;
+        if(!double.TryParse(args.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value)||!double.IsFinite(value)){message="请输入有效参数。";revision++;return;}
+        var intent=new SketchEditIntent{EntityId=e.Id,Field=field=="diameter"?"radius":field,Value=field=="diameter"?value/2:value};
+        await Mutate(()=>{
+            var anchor=e.Anchor();switch(field){case "radius":e.Radius=value;break;case "sides":if(value!=Math.Truncate(value))throw new ArgumentException("边数必须为整数。");e.Sides=(int)value;break;case "startAngle":e.StartAngle=value;break;case "sweepAngle":e.SweepAngle=value;break;case "diameter":e.Radius=value/2;break;case "width":e.Width=value;break;case "height":e.Height=value;break;case "angle":e.Angle=value;break;case "x":e.X=value;break;case "y":e.Y=value;break;case "length":if(value<1)throw new ArgumentException("直线长度至少为 1 mm。");var length=Math.Sqrt(e.Width*e.Width+e.Height*e.Height);e.Width*=value/length;e.Height*=value/length;break;}e.KeepAnchor(anchor);
+        },"图形参数已更新 · 保持已有重合关系和尺寸约束",intent);
+    }
+    async Task RemoveCoincidence(string id)
+    {
+        if(selectedSketch is not {} sketch||entity is not {} e)return;
+        await RemoveTreeCoincidence((sketch.Id,e.Id,id));
+    }
+    async Task RemoveTreeCoincidence((string SketchId,string EntityId,string ConstraintId) item)
+    {
+        if(EditingBlocked()||operation is not null||pickingSketchPlane||(editing is not null&&editing.Id!=item.SketchId))return;
+        var sketch=doc.Sketches.FirstOrDefault(s=>s.Id==item.SketchId);
+        var target=sketch?.Entities.FirstOrDefault(e=>e.Id==item.EntityId);
+        if(sketch is null||target is null||!target.Coincidences.Any(c=>c.Id==item.ConstraintId))return;
+        await Mutate(()=>{
+            target.Coincidences.RemoveAll(c=>c.Id==item.ConstraintId);
+            sketchId=sketch.Id;profileId=target.Id;support=sketch.Plane;historyFeatureId=null;modelFaceSelected=false;
+        },"已解除此约束，图元和其他约束保留 · 可撤销恢复");
+        RefreshUi();
+    }
+    async Task ChangeReferenceLine(ChangeEventArgs args)
+    {
+        if(editing is null||entity is not {} e||e.Kind=="line")return;
+        var id=args.Value?.ToString();
+        await Mutate(()=>{
+            if(string.IsNullOrEmpty(id)){e.ReferenceLineId=null;return;}
+            var line=selectedSketch!.Entities.FirstOrDefault(l=>l.Id==id&&l.Kind=="line")??throw new ArgumentException("参考线已不存在。");
+            var length=Math.Sqrt(line.Width*line.Width+line.Height*line.Height);
+            var cx=e.Kind is "circle" or "arc" or "polygon"?e.X:e.X+e.Width/2;var cy=e.Kind is "circle" or "arc" or "polygon"?e.Y:e.Y+e.Height/2;
+            e.ReferenceLineId=id;e.ReferenceOffset=((cx-line.X)*-line.Height+(cy-line.Y)*line.Width)/length;
+        },"参考线距离约束已更新，保持当前距离");
+    }
+    async Task ChangeReferenceOffset(ChangeEventArgs args)
+    {
+        if(selectedSketch is not {} s||entity is not {} e||e.ReferenceLineId is null)return;
+        if(!double.TryParse(args.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value)||!double.IsFinite(value))return;
+        await ApplyDimensionValue(s.Id,e.Id,-1,value);
+    }
+    async Task ChangeFixedPoint(ChangeEventArgs args)
+    {
+        if(editing is null || entity is not {} e)return;
+        await Mutate(()=>e.FixedPoint=args.Value?.ToString()??"none","固定点约束已更新");
+    }
+    async Task RemoveDimension()
+    {
+        if(editing is null || entity is not {} e || edgeIndex is not {} i)return;
+        await Mutate(()=>e.DimensionedEdges.Remove(i),"已解除尺寸约束，大小可拖动调整");
+    }
+    [JSInvokable] public async Task DragEntity(string id,double x,double y,double width,double height,double radius)
+    {
+        if(editing is not {} s || tool!="select" || s.Entities.FirstOrDefault(e=>e.Id==id) is not {} e)return;
+        await Mutate(()=>{
+            var anchor=e.Anchor();var sizeLocked=e.DimensionedEdges.Count>0;
+            if(e.Kind is "circle" or "arc" or "polygon") {if(!sizeLocked)e.Radius=radius;}
+            else if(e.Kind=="line") {if(sizeLocked && Math.Abs(Math.Sqrt(width*width+height*height)-EdgeValue(e,0))>.0001)throw new ArgumentException("拖动不能改变已约束的直线长度。");e.Width=width;e.Height=height;}
+            else {if(!e.DimensionedEdges.Any(i=>i%2==0))e.Width=width;if(!e.DimensionedEdges.Any(i=>i%2==1))e.Height=height;}
+            e.X=x;e.Y=y;e.KeepAnchor(anchor);sketchId=s.Id;profileId=id;
+        },"图元已按约束调整 · 后续特征已重建");
+        RefreshUi();
+    }
+    async Task StartFeatureMode((string Mode,string Kind) choice)
+    {
+        if(EditingBlocked()||operation is not null||editing is not null||pickingSketchPlane)return;
+        if(choice.Mode=="chamfer"){if(doc.Features.Count==0)return;sketchId=doc.Features[0].SketchId;support=null;regionKeys.Clear();}
+        else if(!((choice.Mode is "sweep" or "loft")?CanSweep:CanFeature)||choice.Kind=="cut"&&doc.Features.Count==0)return;
+        editingFeatureId=null;featureMode=choice.Mode;operation=choice.Kind;tool="select";distance=choice.Mode=="chamfer"?2:20;endCondition="blind";reversed=false;targetFace=null;pickingTarget=false;
+        rotationAxisSelected=false;revolveAngle=360;axis="Y";axisOffset=0;axisEntityId=null;axisSketchId=null;axisEdgeIndex=0;axisModelEdge=null;pickingRotationAxis=featureMode=="revolve";pathSketchId=pathEntityId=null;pathInterpolation="native";sweepOrientation="follow";centerPathLength=50;centerPathAngle=0;loftSections=[];chamferEdge=null;chamferEdges=[];edgeTreatment="chamfer";chamferAngle=45;
+        thinWall=false;wallThickness=2;wallSide="center";openProfileEntityId=null;sweepPickRole=null;
+        if(featureMode=="sweep"){
+            await RefreshLoftChoices();
+            if(regionKeys.Count==0){
+                var current=selectedSketch;var closedChoice=loftChoices.FirstOrDefault(c=>c.SketchId==sketchId);
+                if(entity?.Kind is not ("line" or "arc")&&closedChoice is not null)regionKeys=closedChoice.RegionKeys.ToList();
+                else {pathSketchId=sketchId;pathEntityId=entity?.Kind is "line" or "arc" or "circle" or "ellipse"?entity.Id:DefaultPathEntity(current);sketchId=null;profileId=null;support=null;regionKeys.Clear();}
+            }
+            sweepPickRole=sketchId is null?"profile":"path";
+        }
+        if(featureMode=="loft"){
+            await RefreshLoftChoices();
+            if(regionKeys.Count==0){var choices=loftChoices.Where(c=>c.SketchId==sketchId).ToList();if(choices.Count==1)regionKeys=choices[0].RegionKeys.ToList();else {operation=null;message="请先在视口选择这个草图的一个闭合区域，再点击放样";await Render();return;}}
+        }
+        message=featureMode=="chamfer"?"点击实体直边或圆形边界设置倒角／圆角":featureMode=="loft"?"起始截面已保留，请点击下一个草图区域或实体平面":"设置特征参数，检查预览后确认";await Render();
+    }
+    async Task RefreshLoftChoices(){if(module is null||!CanUseBrowser)return;try{loftChoices=await BrowserAsync<List<CadLoftChoice>>("loftSectionChoices");}catch(OperationCanceledException) when(!CanUseBrowser){}}
+    string LoftSectionName(CadLoftSection section)=>section.Face is {} face?$"{doc.Features.FirstOrDefault(f=>f.Id==face.FeatureId)?.Label??"实体"} {doc.Features.FindIndex(f=>f.Id==face.FeatureId)+1} · {(face.Face=="top"?"顶面":face.Face=="bottom"?"底面":"侧面")}截面":loftChoices.FirstOrDefault(c=>c.SketchId==section.SketchId&&c.RegionKeys.SequenceEqual(section.RegionKeys))?.Label??doc.Sketches.FirstOrDefault(s=>s.Id==section.SketchId)?.Name??"截面已失效";
+    async Task RemoveLoftSection(int index){if(index<0||index>=loftSections.Count)return;loftSections.RemoveAt(index);await Render();}
+    [JSInvokable] public async Task PickLoftSection(CadLoftSection section){
+        if(EditingBlocked()||operation is null||featureMode!="loft"||section.RegionKeys is null)return;
+        if(loftSections.Count>=8){message="最多选择 9 个放样截面";RefreshUi();return;}
+        if(section.Face is {} face){
+            if(face.Face=="curved"||!doc.Features.Any(f=>f.Id==face.FeatureId))return;
+            if(loftSections.Any(s=>s.Face is {} existingFace&&existingFace.FeatureId==face.FeatureId&&existingFace.Face==face.Face)){message="这个实体面已在截面列表中";RefreshUi();return;}
+        }else{
+            if(section.SketchId==sketchId||loftSections.Any(s=>s.SketchId==section.SketchId)){message="该草图已在截面列表中，请选择另一个截面";RefreshUi();return;}
+            if(!doc.Sketches.Any(s=>s.Id==section.SketchId&&s.Finished)||section.RegionKeys.Count!=1)return;
+        }
+        loftSections.Add(section);message=$"已选择 {loftSections.Count+1} 个截面，可继续选择或确认放样";await Render();RefreshUi();
+    }
+    async Task SetRevolveAxis(ChangeEventArgs e){
+        var value=e.Value?.ToString();if(value=="model"&&axisModelEdge is not null)return;rotationAxisSelected=false;axisEntityId=null;axisSketchId=null;axisEdgeIndex=0;axisModelEdge=null;pickingRotationAxis=true;
+        if(value is "X" or "Y"){axis=value;rotationAxisSelected=true;pickingRotationAxis=false;}
+        else {var parts=value?.Split('|');if(parts?.Length==3&&int.TryParse(parts[2],out var edge)&&doc.Sketches.Any(s=>s.Id==parts[0]&&s.Finished&&s.Entities.Any(shape=>shape.Id==parts[1]&&shape.RotationEdges.Contains(edge)))){axisSketchId=parts[0];axisEntityId=parts[1];axisEdgeIndex=edge;rotationAxisSelected=true;pickingRotationAxis=false;}}
+        await Render();
+    }
+    [JSInvokable] public async Task SelectRotationAxis(string sid,string entityId,int edgeIndex){
+        if(!CanUseBrowser||operation is null||featureMode!="revolve"||!doc.Sketches.Any(s=>s.Id==sid&&s.Finished&&s.Entities.Any(e=>e.Id==entityId&&e.RotationEdges.Contains(edgeIndex))))return;
+        axisSketchId=sid;axisEntityId=entityId;axisEdgeIndex=edgeIndex;axisModelEdge=null;rotationAxisSelected=true;pickingRotationAxis=false;message="旋转轴已选择，请检查预览";await Render();RefreshUi();
+    }
+    async Task BeginRotationAxisPick(){if(EditingBlocked()||operation is null||featureMode!="revolve")return;pickingRotationAxis=true;message="点击草图的直边、参考线或已有实体直边作为旋转轴";await Render();}
+    [JSInvokable] public async Task SelectModelRotationAxis(CadModelEdgeReference reference){
+        if(EditingBlocked()||operation is null||featureMode!="revolve")return;
+        axisModelEdge=reference;axisEntityId=null;axisSketchId=null;axisEdgeIndex=0;rotationAxisSelected=true;pickingRotationAxis=false;message="实体直边已用作旋转轴";await Render();RefreshUi();
+    }
+    async Task SetAxisOffset(ChangeEventArgs e){if(TryNumber(e,-1000,1000,out var value)){axisOffset=value;await Render();}}
+    async Task SetRevolveAngle(ChangeEventArgs e){if(TryNumber(e,1,360,out var value)){revolveAngle=value;await Render();}}
+    bool TryNumber(ChangeEventArgs e,double min,double max,out double value){if(double.TryParse(e.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out value)&&double.IsFinite(value)&&value>=min&&value<=max)return true;message=$"数值范围应为 {min}–{max}。";return false;}
+    void SetDefaultOpenProfile(){var source=selectedSketch;if(source is null)return;var selected=source.Entities.FirstOrDefault(e=>e.Id==profileId&&!e.Construction&&e.Kind is "line" or "arc");openProfileEntityId=selected?.Id??(source.Entities.Any(e=>e.Kind=="line"&&!e.Construction)?null:source.Entities.FirstOrDefault(e=>e.Kind=="arc"&&!e.Construction)?.Id);}
+    async Task BeginSweepPick(string role){if(EditingBlocked()||operation is null||featureMode!="sweep")return;sweepPickRole=role;message=role=="profile"?"点击闭合轮廓作为扫描截面":"点击另一草图中的直线或曲线作为扫描路径";await Render();}
+    async Task SetSweepProfileSketch(ChangeEventArgs e){
+        var next=doc.Sketches.FirstOrDefault(s=>s.Id==e.Value?.ToString()&&s.Finished);if(next is null)return;
+        if(next.Id==pathSketchId){message="截面与路径请分别选择不同草图中的几何。";return;}
+        sketchId=next.Id;support=next.Plane;profileId=null;edgeIndex=null;await RefreshLoftChoices();regionKeys=loftChoices.FirstOrDefault(c=>c.SketchId==next.Id)?.RegionKeys.ToList()??[];
+        thinWall=thinWall&&regionKeys.Count==0;openProfileEntityId=null;if(thinWall)SetDefaultOpenProfile();sweepPickRole=pathSketchId is null?"path":null;await Render();
+    }
+    async Task SetSweepRegion(ChangeEventArgs e){var choice=loftChoices.FirstOrDefault(c=>c.Value==e.Value?.ToString()&&c.SketchId==sketchId);if(choice is null)return;regionKeys=choice.RegionKeys.ToList();thinWall=false;sweepPickRole=pathSketchId is null?"path":null;await Render();}
+    async Task SetSweepThinWall(ChangeEventArgs e){thinWall=e.Value is true;if(thinWall){SetDefaultOpenProfile();}await Render();}
+    [JSInvokable] public async Task SelectSweepPath(string sid,string pid){
+        if(EditingBlocked()||operation is null||featureMode!="sweep"||sid==sketchId)return;
+        var source=doc.Sketches.FirstOrDefault(s=>s.Id==sid&&s.Finished);if(source?.Entities.Any(e=>e.Id==pid&&e.Kind is "line" or "arc" or "circle" or "ellipse")!=true)return;
+        pathSketchId=sid;pathEntityId=pid;SyncCenterPathParameters();sweepPickRole=sketchId is null?"profile":null;message="扫描路径已选择 · 截面中心定位到路径起点，实体沿路径生成";await Render();RefreshUi();
+    }
+    async Task SetOpenProfileEntity(ChangeEventArgs e){openProfileEntityId=string.IsNullOrEmpty(e.Value?.ToString())?null:e.Value!.ToString();await Render();}
+    async Task SetWallThickness(ChangeEventArgs e){if(TryNumber(e,.1,1000,out var value)){wallThickness=value;await Render();}}
+    async Task SetWallSide(ChangeEventArgs e){var value=e.Value?.ToString();if(value is "center" or "left" or "right"){wallSide=value;await Render();}}
+    static string? DefaultPathEntity(CadSketch? sketch)=>sketch?.Entities.Count(e=>e.Kind=="line")>1?null:sketch?.Entities.FirstOrDefault(e=>e.Kind is "line" or "arc" or "circle" or "ellipse")?.Id;
+    async Task SetPathSketch(ChangeEventArgs e){pathSketchId=e.Value?.ToString();pathEntityId=DefaultPathEntity(doc.Sketches.FirstOrDefault(s=>s.Id==pathSketchId));SyncCenterPathParameters();sweepPickRole=sketchId is null?"profile":null;await Render();}
+    async Task SetPathEntity(ChangeEventArgs e){pathEntityId=string.IsNullOrEmpty(e.Value?.ToString())?null:e.Value!.ToString();sweepPickRole=sketchId is null?"profile":null;await Render();}
+    CadSketch? CenterSweepPath=>doc.Sketches.FirstOrDefault(s=>s.Id==pathSketchId&&s.Plane.SourceSketchId==sketchId&&s.Plane.CenterRegionKeys.SequenceEqual(regionKeys)&&s.Entities.Count==1&&s.Entities[0].Kind=="line");
+    void SyncCenterPathParameters(){if(CenterSweepPath is {} path){var line=path.Entities[0];centerPathLength=Math.Sqrt(line.Width*line.Width+line.Height*line.Height);centerPathAngle=Math.Atan2(line.Width,line.Height)*180/Math.PI;}}
+    void SetCenterPathLength(ChangeEventArgs e){if(TryNumber(e,1,1000,out var value))centerPathLength=value;}
+    void SetCenterPathAngle(ChangeEventArgs e){if(TryNumber(e,-180,180,out var value))centerPathAngle=value;}
+    async Task SetSweepOrientation(ChangeEventArgs e){var value=e.Value?.ToString();if(value is "follow" or "profile"){sweepOrientation=value;await Render();}}
+    async Task CreateCenterSweepPath(){
+        if(EditingBlocked()||operation is null||featureMode!="sweep"||thinWall||selectedSketch is not {} source||regionKeys.Count==0)return;
+        var previousPath=pathSketchId;var previousEntity=pathEntityId;var previousRole=sweepPickRole;
+        var existing=CenterSweepPath;var radians=centerPathAngle*Math.PI/180;
+        var ok=await Mutate(()=>{
+            var path=existing??new CadSketch{Name=$"中心路径 {doc.Sketches.Count+1:00}",Finished=true,Plane=new SketchPlane{SourceSketchId=source.Id,CenterRegionKeys=regionKeys.ToList()}};
+            if(existing is null){path.Entities.Add(new SketchEntity{Kind="line",X=0,Y=0,Width=0,Height=centerPathLength,Coincidences=[new(){Point="start",Target=new(){Kind="origin"}}]});doc.Sketches.Add(path);}
+            var line=path.Entities[0];line.Width=centerPathLength*Math.Sin(radians);line.Height=centerPathLength*Math.Cos(radians);
+            pathSketchId=path.Id;pathEntityId=line.Id;pathInterpolation="native";sweepPickRole=null;
+        },"中心路径已保存 · 起点关联截面中心，可编辑路径草图调整方向和形状");
+        if(!ok){pathSketchId=previousPath;pathEntityId=previousEntity;sweepPickRole=previousRole;await Render();}
+    }
+    async Task SetPathInterpolation(ChangeEventArgs e){var value=e.Value?.ToString();if(value is "native" or "spline"){pathInterpolation=value;await Render();}}
+    async Task SetSketchOffset(ChangeEventArgs e){if(selectedSketch is not {} sketch||sketch.Plane.FeatureId is not null||sketch.Plane.SourceSketchId is not null||!TryNumber(e,-1000,1000,out var value))return;await Mutate(()=>sketch.Plane.Offset=value,"基准面偏移已更新，相关特征已重建");}
+    [JSInvokable] public async Task SelectChamferEdge(CadChamferEdge edge){if(EditingBlocked()||operation is null||featureMode!="chamfer")return;var key=JsonSerializer.Serialize(edge);var index=chamferEdges.FindIndex(item=>JsonSerializer.Serialize(item)==key);if(index>=0)chamferEdges.RemoveAt(index);else if(chamferEdges.Count<32)chamferEdges.Add(edge);chamferEdge=chamferEdges.FirstOrDefault();message=$"已选择 {chamferEdges.Count} 条处理边";await Render();RefreshUi();}
+    [JSInvokable] public async Task SelectChamferEdges(List<CadChamferEdge> edges){
+        if(EditingBlocked()||operation is null||featureMode!="chamfer"||edges.Count==0)return;
+        var incoming=edges.DistinctBy(edge=>JsonSerializer.Serialize(edge)).ToList();var keys=incoming.Select(edge=>JsonSerializer.Serialize(edge)).ToHashSet();
+        var missing=incoming.Where(edge=>!chamferEdges.Any(existing=>JsonSerializer.Serialize(existing)==JsonSerializer.Serialize(edge))).ToList();
+        if(missing.Count==0)chamferEdges.RemoveAll(edge=>keys.Contains(JsonSerializer.Serialize(edge)));
+        else {if(chamferEdges.Count+missing.Count>32){message="一次最多选择 32 条边，请分组处理。";return;}chamferEdges.AddRange(missing);}
+        chamferEdge=chamferEdges.FirstOrDefault();message=$"已选择 {chamferEdges.Count} 条处理边 · 相切圆弧与直边连续选择";await Render();RefreshUi();
+    }
+    async Task RemoveTreatmentEdge(int index){if(index<0||index>=chamferEdges.Count)return;chamferEdges.RemoveAt(index);chamferEdge=chamferEdges.FirstOrDefault();await Render();}
+    [JSInvokable] public async Task<string?> SetEdgeRadius(string? featureId,List<CadChamferEdge> edges,double value,bool displayOnly){
+        if(EditingBlocked()||operation is null||featureMode!="chamfer"||editingFeatureId!=featureId||JsonSerializer.Serialize(chamferEdges)!=JsonSerializer.Serialize(edges))return "特征已改变，请重新选择圆角";
+        if(!double.IsFinite(value)||value<.1)return "请输入大于等于 0.1 mm 的有限尺寸";
+        distance=value;
+        if(displayOnly){previewState=new(){Valid=true,Min=value,Max=value,Message=$"{(edgeTreatment=="fillet"?"R":"D")} {value:0.##} mm"};RefreshUi();return null;}
+        await Render();RefreshUi();return null;
+    }
+    [JSInvokable] public Task UpdateEdgePreview(string? featureId,List<CadChamferEdge> edges,double value,string treatment,double angle,bool valid,string detail){
+        if(operation is null||featureMode!="chamfer"||editingFeatureId!=featureId||distance!=value||edgeTreatment!=treatment||chamferAngle!=angle||JsonSerializer.Serialize(chamferEdges)!=JsonSerializer.Serialize(edges))return Task.CompletedTask;
+        previewState=new(){Valid=valid,Min=value,Max=value,Message=detail};RefreshUi();return Task.CompletedTask;
+    }
+    async Task SetEdgeTreatment(ChangeEventArgs e){if(e.Value?.ToString() is "fillet" or "chamfer"){edgeTreatment=e.Value.ToString()!;await Render();}}
+    async Task SetChamferAngle(ChangeEventArgs e){if(TryNumber(e,1,89,out var value)){chamferAngle=value;await Render();}}
+    async Task SetEndCondition(ChangeEventArgs e)
+    {
+        var value=e.Value?.ToString(); if(value is not ("blind" or "throughAll" or "upToFace")) return;
+        if(value != "blind" && doc.Features.Count == 0) return;
+        endCondition=value; pickingTarget=value=="upToFace" && targetFace is null;
+        message=pickingTarget?"请在实体上点击一个平面作为终止面":"终止条件已更新"; await Render();
+    }
+    async Task SetReversed(ChangeEventArgs e) { reversed=e.Value is true; await Render(); }
+    async Task BeginTargetPick() { pickingTarget=true; message="点击实体上的终止平面，中键可旋转视角"; await Render(); }
+    [JSInvokable] public async Task CaptureTargetFace(string featureId, string face)
+    {
+        if(operation is null || !pickingTarget || endCondition != "upToFace") return;
+        if(face=="curved") { message="请选择平面作为终止面，曲面暂不支持。"; RefreshUi(); return; }
+        if(!doc.Features.Any(f=>f.Id==featureId)) return;
+        targetFace=new(){FeatureId=featureId,Face=face};pickingTarget=false;message="终止面已选择 · 请检查预览";await Render();RefreshUi();
+    }
+    async Task DownloadPerformanceReport(){if(module is not null&&CanUseBrowser)await BrowserVoidAsync("downloadPerformanceReport");}
+    [JSInvokable] public void CanvasHint(string hint) { message=hint;RefreshUi(); }
+    async Task SetDistance(ChangeEventArgs e)
+    {
+        if(!double.TryParse(e.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value)||!double.IsFinite(value)||Math.Abs(value)<(featureMode=="chamfer"?.1:1)||featureMode!="chamfer"&&Math.Abs(value)>1000||featureMode!="extrude"&&value<0){message=featureMode=="chamfer"?"请输入大于等于 0.1 mm 的有限尺寸":"请输入有效距离：绝对值 1–1000 mm，负数表示反向";return;}
+        distance=Math.Abs(value);if(featureMode=="extrude")reversed=value<0;await Render();
+    }
+    [JSInvokable] public async Task<string?> SetFeatureDepth(string sid,string kind,string? featureId,List<string> keys,bool directionReversed,double value)
+    {
+        if(featureMode!="extrude"||operation!=kind||sketchId!=sid||editingFeatureId!=featureId||endCondition!="blind"||pickingTarget||reversed!=directionReversed||!regionKeys.SequenceEqual(keys))return "操作已改变，请重新拖动。";
+        if(!double.IsFinite(value)||Math.Abs(value)<1||Math.Abs(value)>1000)return "距离绝对值必须在 1–1000 mm 范围内，零厚度不能生成实体。";
+        distance=Math.Abs(value);reversed=value<0;message="游标深度及方向已更新 · 确认后生成特征";await Render();RefreshUi();return null;
+    }
+    bool CanConfirmFeature => operation is not null && !documentBusy && !saving && previewState.Valid && !pickingTarget
+        && (featureMode=="chamfer" ? chamferEdges.Count>0 || chamferEdge is not null : selectedSketch?.Finished==true && (featureMode=="sweep"&&thinWall || regionKeys.Count>0))
+        && (featureMode!="loft" || loftSections.Count>0)
+        && (featureMode!="revolve" || rotationAxisSelected&&!pickingRotationAxis);
+    async Task ConfirmFeature()
+    {
+        if(!CanConfirmFeature)return;
+        var kind=operation;
+        var keys = featureMode=="sweep"&&thinWall?new List<string>():regionKeys.ToList();
+        var sources = regions.Where(r => keys.Contains(r.Key)).SelectMany(r => r.SourceIds).Distinct().ToList();
+        if(featureMode=="sweep"&&thinWall)sources=selectedSketch!.Entities.Where(e=>openProfileEntityId is null?e.Kind=="line"&&!e.Construction:e.Id==openProfileEntityId).Select(e=>e.Id).ToList();
+        var existingId=editingFeatureId;
+        var ok=await Mutate(() => {
+            var feature=CurrentFeature();feature.Id=existingId??Guid.NewGuid().ToString("N");feature.RegionKeys=keys;feature.SourceEntityIds=sources;feature.TargetFace=endCondition=="upToFace"?targetFace:null;
+            if(existingId is null)doc.Features.Add(feature);else {var index=doc.Features.FindIndex(f=>f.Id==existingId);if(index<0)throw new ArgumentException("原特征已不存在。");doc.Features[index]=feature;}
+            // The mutation renders before returning. End preview mode now so it
+            // does not append a duplicate temporary feature to the committed solid.
+            operation=null;editingFeatureId=null;pickingTarget=false;
+        },existingId is not null?"历史特征已更新，后续步骤已重建":CurrentFeature().Label+"已生成");
+        if(ok) { editingFeatureId=null;operation=null; pickingTarget=false;targetFace=null;profileId=null; edgeIndex=null; regionKeys.Clear(); sketchId=null; support=null; await Render(); }
+    }
+    string? EdgeAppearanceSource(){
+        if(featureMode!="chamfer")return null;
+        if(selectedBody is {} body){
+            var references=chamferEdges.Count>0?chamferEdges:chamferEdge is {} edge?new List<CadChamferEdge>{edge}:new();
+            if(references.Count>0&&references.All(edge=>body.FeatureIds.Contains(edge.FaceA.FeatureId!)&&body.FeatureIds.Contains(edge.FaceB.FeatureId!))&&bodies.Count(candidate=>candidate.FeatureIds.Intersect(body.FeatureIds).Any())==1)return body.Id;
+            return null;
+        }
+        return doc.Features.FirstOrDefault(f=>f.Id==editingFeatureId)?.AppearanceSourceId;
+    }
+    bool HasEdgeSurfaceReferences(string id){
+        var token=JsonSerializer.Serialize(id);
+        return JsonSerializer.Serialize(doc.Sketches).Contains(token,StringComparison.Ordinal)||doc.Features.Where(f=>f.Id!=id).Any(f=>JsonSerializer.Serialize(f).Contains(token,StringComparison.Ordinal));
+    }
+    async Task ConvertVisualEdges(){
+        if(EditingBlocked()||operation is not null||editing is not null)return;
+        var candidates=doc.Features.Where(f=>f.Mode=="chamfer"&&!f.VisualOnly&&!f.TopologyBevel&&!HasEdgeSurfaceReferences(f.Id)).ToList();
+        if(candidates.Count==0){message="现有倒角面被后续草图或特征引用，已保留实体几何；新建边缘处理使用轻量外观。";return;}
+        await Mutate(()=>{foreach(var feature in candidates)feature.VisualOnly=true;},$"已将 {candidates.Count} 项边缘处理转为轻量外观 · 可撤销；草图参照和 STL 使用原始几何");
+    }
+    async Task EditFeatureSourceSketch()
+    {
+        if(editingFeatureId is null || selectedSketch is not {} source)return;
+        await CancelFeature();await EditHistorySketch(source.Id);
+    }
+    async Task CancelFeature() { editingFeatureId=null;operation=null; pickingTarget=false;targetFace=null; message="已取消特征操作"; await Render(); }
+    CadAppearance BodyAppearance=>selectedBody is {} body?(doc.Materials.GetValueOrDefault(body.Id)??body.FeatureIds.AsEnumerable().Reverse().Select(id=>doc.Features.FirstOrDefault(f=>f.Id==id)?.AppearanceSourceId).Where(id=>id is not null).Select(id=>doc.Materials.GetValueOrDefault(id!)).FirstOrDefault(material=>material is not null)??body.FeatureIds.Select(id=>doc.Materials.GetValueOrDefault(id)).FirstOrDefault(material=>material is not null)??new CadAppearance()):new();
+    CadAppearance CloneAppearance()=>JsonSerializer.Deserialize<CadAppearance>(JsonSerializer.Serialize(BodyAppearance))!;
+    async Task SelectBody(string id){if(EditingBlocked()||operation is not null||editing is not null||!bodies.Any(body=>body.Id==id))return;selectedBodyId=id;selectedFacePoint=null;sketchId=profileId=null;historyFeatureId=null;support=null;modelFaceSelected=false;regionKeys.Clear();await Render();}
+    [JSInvokable] public async Task SelectBodyFace(string id,string featureId,string face,List<double> point){
+        if(EditingBlocked()||operation is not null||editing is not null)return;
+        selectedBodyId=bodies.Any(body=>body.Id==id)?id:null;selectedFacePoint=point.Count==3&&point.All(double.IsFinite)?point:null;
+        if(face=="curved"){support=null;modelFaceSelected=false;sketchId=profileId=null;historyFeatureId=null;regionKeys.Clear();message="已选择实体 · 可设置独立材质或删除";await Render();RefreshUi();return;}
+        await SelectFace(featureId,face);
+    }
+    [JSInvokable] public async Task DeleteSelectedBody(){if(selectedBodyId is {} id)await DeleteBody(id);RefreshUi();}
+    async Task DeleteBody(string id){
+        if(EditingBlocked()||operation is not null||editing is not null||bodies.FirstOrDefault(body=>body.Id==id) is not {} body)return;
+        deletionPlan=CadDeletionPlan.ForBody(doc,body);deletionError=null;
+    }
+    async Task ChangeEnvironment(ChangeEventArgs args){var value=args.Value?.ToString();if(value is "studio" or "workshop" or "soft" or "none")await Mutate(()=>doc.Environment=value,"反射环境已更新并保存");}
+    async Task ChangeMaterialPreset(ChangeEventArgs args){
+        if(selectedBodyId is not {} id||selectedBody is null||EditingBlocked())return;
+        var name=args.Value?.ToString()??"steel";
+        var material=name switch {
+            "aluminum"=>new CadAppearance{Preset=name,Color="#c8cbd0",Metalness=1,Roughness=.32,Clearcoat=0,Anisotropy=.4,Grain=.16},
+            "copper"=>new CadAppearance{Preset=name,Color="#b86d45",Metalness=1,Roughness=.23,Clearcoat=0,Anisotropy=.15,Grain=.1},
+            "brass"=>new CadAppearance{Preset=name,Color="#bca25b",Metalness=1,Roughness=.26,Clearcoat=0,Anisotropy=.15,Grain=.12},
+            "iron"=>new CadAppearance{Preset=name,Color="#555b63",Metalness=.8,Roughness=.72,Clearcoat=0,Anisotropy=0,Grain=.65},
+            "paint"=>new CadAppearance{Preset=name,Color="#305b78",Metalness=.25,Roughness=.28,Clearcoat=.85,Anisotropy=0,Grain=.12},
+            "plastic"=>new CadAppearance{Preset=name,Color="#d4d7d9",Metalness=0,Roughness=.48,Clearcoat=.04,Anisotropy=0,Grain=.22},
+            "rubber"=>new CadAppearance{Preset=name,Color="#24272b",Metalness=0,Roughness=.9,Clearcoat=0,Specular=.25,Anisotropy=0,Grain=.45},
+            _=>new CadAppearance()};
+        var previous=BodyAppearance;material.TextureId=previous.TextureId;material.TextureSize=previous.TextureSize;material.TextureAngle=previous.TextureAngle;material.Mapping=previous.Mapping;
+        await Mutate(()=>doc.Materials[id]=material,"当前实体材质已更新 · 其他实体独立保留");
+    }
+    async Task ChangeMaterial(string field,ChangeEventArgs args){
+        if(selectedBodyId is not {} id||selectedBody is null||EditingBlocked())return;var material=CloneAppearance();
+        if(field=="color")material.Color=args.Value?.ToString()??material.Color;else if(field=="mapping")material.Mapping=args.Value?.ToString()??"uniform";
+        else {if(!double.TryParse(args.Value?.ToString(),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value))return;switch(field){case "roughness":material.Roughness=value;break;case "metalness":material.Metalness=value;break;case "specular":material.Specular=value;break;case "clearcoat":material.Clearcoat=value;break;case "anisotropy":material.Anisotropy=value;break;case "grain":material.Grain=value;break;case "brushAngle":material.BrushAngle=value;break;case "environmentStrength":material.EnvironmentStrength=value;break;case "textureSize":material.TextureSize=value;break;case "textureAngle":material.TextureAngle=value;break;}}
+        await Mutate(()=>{material.Validate();doc.Materials[id]=material;},"当前实体材质参数已保存");
+    }
+    async Task UploadBodyTexture(InputFileChangeEventArgs args){
+        if(selectedBodyId is not {} id||selectedBody is null||EditingBlocked())return;var material=CloneAppearance();var textureProject=projectId;
+        try{await using var stream=args.File.OpenReadStream(8*1024*1024);using var buffer=new MemoryStream();await stream.CopyToAsync(buffer);material.TextureId=await Projects.SaveTextureAsync(buffer.ToArray());
+            if(projectId!=textureProject||!bodies.Any(body=>body.Id==id))return;var current=doc.Materials.GetValueOrDefault(id);if(current is not null){var texture=material.TextureId;material=JsonSerializer.Deserialize<CadAppearance>(JsonSerializer.Serialize(current))!;material.TextureId=texture;}await Mutate(()=>doc.Materials[id]=material,"贴图已保存并应用 · 自动统一毫米铺设密度");
+        }catch(JSDisconnectedException){CircuitState.MarkDisconnected();}catch(OperationCanceledException){}catch(Exception error) when(error is IOException or ArgumentException){message=error.Message;}
+    }
+    async Task RemoveBodyTexture(){if(selectedBodyId is not {} id||selectedBody is null)return;var material=CloneAppearance();material.TextureId=null;await Mutate(()=>doc.Materials[id]=material,"当前实体贴图已移除");}
+    async Task DeleteTreeSketch(string id)=>await RequestTreeDeletion("sketch",id);
+    async Task DeleteTreeEntity((string SketchId,string EntityId) item)=>await RequestTreeDeletion("entity",item.EntityId,item.SketchId);
+    async Task DeleteTreeFeature(string id)=>await RequestTreeDeletion("feature",id);
+    async Task RequestTreeDeletion(string kind,string id,string? sid=null)
+    {
+        if(EditingBlocked()||operation is not null||pickingSketchPlane)return;
+        if(editing is not null&&(kind=="feature"||editing.Id!=(sid??id)))return;
+        if(kind=="sketch"&&!doc.Sketches.Any(s=>s.Id==id)||kind=="feature"&&!doc.Features.Any(f=>f.Id==id)||kind=="entity"&&!doc.Sketches.Any(s=>s.Id==sid&&s.Entities.Any(e=>e.Id==id)))return;
+        var plan=CadDeletionPlan.Create(doc,kind,id,sid);
+        deletionPlan=plan;deletionError=null;
+        if(!plan.HasDependents)await ConfirmTreeDeletion();
+    }
+    async Task ConfirmTreeDeletion()
+    {
+        if(deletionPlan is not {} plan||EditingBlocked())return;
+        var ok=await Mutate(()=>{plan.Apply(doc);ResetSelection();},"对象已删除，相关约束已清理 · 可撤销恢复");
+        if(ok){deletionPlan=null;deletionError=null;}else deletionError=message;
+    }
+    async Task DeleteProfile(){if(selectedSketch is {} sketch&&entity is {} selected)await DeleteTreeEntity((sketch.Id,selected.Id));}
+    async Task Rename(ChangeEventArgs e) => await Mutate(() => doc.Name = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? "未命名零件" : e.Value.ToString()![..Math.Min(40,e.Value.ToString()!.Length)], "项目名称已更新");
+    void ResetSelection() { selectedBodyId=null;selectedFacePoint=null;editingFeatureId=null;modelFaceSelected=false;historyFeatureId=null;pickingSketchPlane=false;operation=null; pickingTarget=false;targetFace=null;endCondition="blind";reversed=false;previewState=new();sketchId=editing?.Id; profileId=null; edgeIndex=null; regionKeys.Clear(); regions.Clear(); support=editing?.Plane; tool="select"; revision++; }
+    async Task Undo() {await RestoreHistory(false);}
+    async Task Redo() {await RestoreHistory(true);}
+    async Task RestoreHistory(bool forward)
+    {
+        if(operation is not null||EditingBlocked())return;
+        var source=forward?redo:undo;var target=forward?undo:redo;
+        if(!source.TryPop(out var snapshot))return;
+        documentBusy=true;
+        try{target.Push(Snapshot());doc=JsonSerializer.Deserialize<CadDocument>(snapshot)!;ResetSelection();message=forward?"已重做":"已撤销";await Checkpoint();await Render();}
+        finally{documentBusy=false;}
+    }
+    async Task<bool> FlushBeforeSwitch()
+    {
+        if(projectRestoreFailed){
+            if(protectBrowserDraft){
+                if(!await BrowserAsync<bool>("preserveRecoveryDraft")){message="旧草稿备份失败，暂不能切换项目，请先下载备份。";return false;}
+                protectBrowserDraft=false;
+            }
+            return true;
+        }
+        if(storageConflict){message="当前项目有版本冲突，请先另存为项目或下载备份。";return false;}
+        if(serverRevision==0&&!pendingSave&&doc.Sketches.Count==0&&doc.Features.Count==0)return true;
+        await WriteProjectDraft(Snapshot()!=savedSnapshot);
+        return await SaveToBackend();
+    }
+    async Task<bool> AdoptNewDocument(CadDocument next,string success)
+    {
+        if(EditingBlocked()||!await FlushBeforeSwitch())return false;
+        if(module is null||!await InvokeView("prepareLoadedDocument",next))return false;
+        projectId=Guid.NewGuid();serverRevision=0;savedSnapshot="";lastSavedAt=null;storageConflict=false;projectRestoreFailed=false;requiresRepair=false;storageMessage=null;protectBrowserDraft=false;
+        doc=next;ResetSelection();undo.Clear();redo.Clear();showProjects=false;message=success;
+        documentBusy=true;
+        try{await Checkpoint();await Render();await Camera(editing is null?"iso":"sketch");return true;}
+        finally{documentBusy=false;}
+    }
+    void BeginNewProject(){if(EditingBlocked())return;projectNameMode="new";projectNameInput="新建零件";}
+    void BeginRenameProject(){if(EditingBlocked())return;projectNameMode="rename";projectNameInput=doc.Name;}
+    void BeginSaveAs(){if(EditingBlocked())return;if(projectRestoreFailed){message="当前项目未恢复，不能把空白视图另存为原项目副本。请新建或打开项目。";return;}projectNameMode="copy";projectNameInput=(doc.Name.Length>35?doc.Name[..35]:doc.Name)+" 副本";}
+    async Task ProjectNameKey(KeyboardEventArgs e){if(e.Key=="Enter")await ConfirmProjectName();else if(e.Key=="Escape")projectNameMode=null;}
+    async Task ConfirmProjectName(){
+        if(EditingBlocked()||string.IsNullOrWhiteSpace(projectNameInput))return;
+        var name=projectNameInput.Trim();if(name.Length>40)name=name[..40];
+        if(projectNameMode=="new"){if(await AdoptNewDocument(new CadDocument{Name=name},"项目已创建 · 编辑内容自动保存"))projectNameMode=null;}
+        else if(projectNameMode=="rename"){if(await Mutate(()=>doc.Name=name,"当前零件已重命名 · 自动保存"))projectNameMode=null;}
+        else if(projectNameMode=="copy"){await SaveCopy(name);projectNameMode=null;}
+    }
+    async Task Save()
+    {
+        if(EditingBlocked())return;
+        await WriteProjectDraft(Snapshot()!=savedSnapshot);
+        if(await SaveToBackend())message="项目已保存到后端";
+    }
+    async Task SaveCopy(string name)
+    {
+        if(EditingBlocked())return;
+        doc=JsonSerializer.Deserialize<CadDocument>(Snapshot())!;doc.Name=name;undo.Clear();redo.Clear();
+        projectId=Guid.NewGuid();serverRevision=0;savedSnapshot="";lastSavedAt=null;storageConflict=false;projectRestoreFailed=false;requiresRepair=false;storageMessage=null;protectBrowserDraft=false;
+        await WriteProjectDraft(true);
+        if(await SaveToBackend()){showProjects=false;message="已另存为独立项目";}
+    }
+    async Task DownloadProject(){if(!EditingBlocked())await InvokeView("download",doc.Name+".cad.json",Snapshot(),"application/json");}
+    async Task ShowProjectBrowser()
+    {
+        if(EditingBlocked())return;
+        try{savedProjects=await Projects.ListAsync();showProjects=true;}
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException){Logger.LogError(ex,"CAD project list failed");storageMessage="无法读取后端项目列表，请检查存储目录权限。";}
+    }
+    void DeleteCurrentProject(){if(EditingBlocked()||serverRevision<1)return;RequestProjectDeletion(new(projectId,doc.Name,serverRevision,lastSavedAt??DateTimeOffset.UtcNow,doc.Sketches.Count,doc.Features.Count));}
+    void RequestProjectDeletion(CadProjectSummary item){if(EditingBlocked())return;projectToDelete=item;projectDeleteError=null;}
+    async Task ConfirmProjectDeletion()
+    {
+        if(EditingBlocked()||projectToDelete is not {} item)return;
+        documentBusy=true;
+        try{
+            await Projects.DeleteAsync(item.Id,item.Revision);
+            if(item.Id==projectId){
+                doc=new();projectId=Guid.NewGuid();serverRevision=0;savedSnapshot="";pendingSave=false;requiresRepair=false;storageConflict=false;projectRestoreFailed=false;storageMessage=null;lastSavedAt=null;protectBrowserDraft=false;
+                ResetSelection();undo.Clear();redo.Clear();deletionPlan=null;message="项目已删除 · 可新建项目继续建模";
+            }
+            projectToDelete=null;projectDeleteError=null;
+            if(CanUseBrowser)await BrowserVoidAsync("forgetProject",item.Id.ToString("D"));
+            savedProjects=await Projects.ListAsync();await Render();
+        }catch(CadProjectConflictException ex){projectDeleteError=ex.Message;try{savedProjects=await Projects.ListAsync();}catch(Exception refreshError) when(refreshError is IOException or UnauthorizedAccessException or JsonException or ArgumentException){Logger.LogWarning(refreshError,"Project list refresh after delete conflict failed");}}
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException){Logger.LogError(ex,"CAD project deletion failed");projectDeleteError="删除未完成："+ex.Message;}
+        catch(OperationCanceledException) when(!CanUseBrowser){}
+        finally{documentBusy=false;RefreshUi();}
+    }
+    async Task LoadProject(Guid id)
+    {
+        if(EditingBlocked()||!await FlushBeforeSwitch())return;
+        documentBusy=true;
+        try{
+            var loaded=await Projects.LoadAsync(id)??throw new ArgumentException("项目文件已不存在。");
+            if(!await InvokeView("prepareLoadedDocument",loaded.Document))return;
+            doc=loaded.Document;projectId=loaded.Id;serverRevision=loaded.Revision;lastSavedAt=loaded.SavedAt;savedSnapshot=Snapshot();pendingSave=false;storageConflict=false;projectRestoreFailed=false;protectBrowserDraft=false;requiresRepair=loaded.RecoveredBackup;storageMessage=null;
+            ResetSelection();undo.Clear();redo.Clear();showProjects=false;message="已打开后端项目";
+            await WriteProjectDraft(false);if(requiresRepair)await SaveToBackend();await Render();await Camera(editing is null?"iso":"sketch");
+        }catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException){Logger.LogError(ex,"CAD project open failed");storageMessage="打开失败："+ex.Message;}
+        finally{documentBusy=false;}
+    }
+    async Task Open(InputFileChangeEventArgs e)
+    {
+        if(EditingBlocked())return;
+        try { using var stream=e.File.OpenReadStream(CadProjectStore.MaxDocumentBytes); var loaded=await JsonSerializer.DeserializeAsync<CadDocument>(stream); if(loaded is null) throw new ArgumentException("文件为空。"); loaded.Validate(); await AdoptNewDocument(loaded,"已导入为独立项目"); }
+        catch(Exception ex) when(ex is JsonException or ArgumentException or IOException) { message="导入失败："+ex.Message; }
+    }
+    bool exportingStl;
+    int stlExportId;
+    async Task Export()
+    {
+        if(EditingBlocked())return;
+        if(exportingStl){message="导出仍在计算中，请等待进度更新。";return;}
+        if(doc.Features.Count==0 || editing is not null || operation is not null) { message="请先结束草图并确认实体特征。"; return; }
+        exportingStl=true;stlExportId++;message="正在生成包含倒角的 STL 网格…";RefreshUi();
+        if(!await InvokeView("exportStl",doc.Name,stlExportId))exportingStl=false;
+    }
+    async Task CancelStlExport(){if(await InvokeView("cancelStlExport")){stlExportId++;exportingStl=false;message="已取消导出。";}}
+    [JSInvokable]
+    public Task StlExportProgress(string status,bool finished,int exportId)=>InvokeAsync(()=>{if(disposed||exportId!=stlExportId)return;message=status;if(finished)exportingStl=false;RefreshUi();});
+    async Task<bool> InvokeView(string method,params object?[] args)
+    {
+        if(module is null||!CanUseBrowser)return false;
+        try{await BrowserVoidAsync(method,args);return true;}
+        catch(OperationCanceledException) when(!CanUseBrowser){return false;}
+        catch(Exception ex) when(ex is JSException or OperationCanceledException){Logger.LogWarning(ex,"CAD view operation {Method} failed",method);message="操作未完成："+ex.Message;return false;}
+    }
+    async Task Fit() {await InvokeView("fit");}
+    bool debugMode;
+    async Task ToggleDebugMode(){if(await InvokeView("setDebugMode",!debugMode))debugMode=!debugMode;}
+    async Task Camera(string view) {await InvokeView("cameraView",view);}
+    void RefreshUi(){if(CanUseBrowser)StateHasChanged();}
+    async ValueTask<T> BrowserAsync<T>(string method,params object?[] args)
+    {
+        if(!CanUseBrowser||module is null)throw new OperationCanceledException("浏览器连接已结束。");
+        try{return await module.InvokeAsync<T>(method,args);}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();throw new OperationCanceledException("浏览器连接已结束。");}
+    }
+    async ValueTask BrowserVoidAsync(string method,params object?[] args)
+    {
+        if(!CanUseBrowser||module is null)throw new OperationCanceledException("浏览器连接已结束。");
+        try{await module.InvokeVoidAsync(method,args);}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();throw new OperationCanceledException("浏览器连接已结束。");}
+    }
+    public ValueTask DisposeAsync()
+    {
+        // Browser-owned observers release WebGL and DOM handlers on removal/pagehide.
+        // No JS interop (including module disposal) is legal after a refresh disconnect.
+        disposed=true;reference?.Dispose();reference=null;module=null;
+        return ValueTask.CompletedTask;
+    }
+
+}
+
+
+
+
+
+

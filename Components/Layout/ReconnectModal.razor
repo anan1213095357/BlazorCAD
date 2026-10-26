@@ -1,0 +1,37 @@
+﻿<script type="module" src="@Assets["Components/Layout/ReconnectModal.razor.js"]"></script>
+
+<dialog id="components-reconnect-modal" data-nosnippet>
+    <div class="components-reconnect-container">
+        <div class="components-rejoining-animation" aria-hidden="true">
+            <div></div>
+            <div></div>
+        </div>
+        <p class="components-reconnect-first-attempt-visible">
+            正在重新连接，编辑内容保留中……
+        </p>
+        <p class="components-reconnect-repeated-attempt-visible">
+            连接未成功，将在 <span id="components-seconds-to-next-attempt"></span> 秒后重试。
+        </p>
+        <p class="components-reconnect-failed-visible">
+            连接暂时中断，请重试。
+        </p>
+        <button id="components-reconnect-button" class="components-reconnect-failed-visible">
+            重试连接
+        </button>
+        <p class="components-pause-visible">
+            编辑会话已暂停。
+        </p>
+        <p class="components-resume-failed-visible">
+            会话恢复未成功，请重试。
+        </p>
+        <button id="components-resume-button" class="components-pause-visible components-resume-failed-visible">
+            恢复会话
+        </button>
+        <div id="components-recovery" class="components-recovery" hidden>
+            <p id="components-recovery-message"></p><small id="components-recovery-status"></small>
+            <button id="components-recovery-download" type="button">下载恢复草稿</button>
+            <button id="components-recovery-restart" type="button">恢复草稿并重新连接</button>
+            <button id="components-recovery-diagnostics" type="button">下载诊断记录</button>
+        </div>
+    </div>
+</dialog>

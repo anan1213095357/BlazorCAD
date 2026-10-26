@@ -1,0 +1,53 @@
+﻿@using BlazorCAD.Models
+<details class="history-branch sketch-branch" open>
+    <summary>
+        <button class="history-row @(SelectedSketchId == Sketch.Id ? "selected" : "")" disabled="@(Disabled || (EditingId is not null && EditingId != Sketch.Id))" @onclick="() => OnSketch.InvokeAsync(Sketch.Id)" @ondblclick="() => OnEditSketch.InvokeAsync(Sketch.Id)" @onclick:preventDefault="true">
+            <CadIcon Name="sketch" /><span class="@(Sketch.Hidden?"sketch-hidden-name":"")">@Sketch.Name</span><small>@(EditingId == Sketch.Id ? "编辑中" : Shared ? "引用" : "")</small>
+        </button>
+        <button class="tree-visibility @(Sketch.Hidden?"is-hidden":"")" title="@(Sketch.Hidden?"显示草图":"隐藏草图")" aria-label="@(Sketch.Hidden?"显示草图":"隐藏草图")" disabled="@(Disabled || EditingId==Sketch.Id)" @onclick="()=>OnToggleVisibility.InvokeAsync(Sketch.Id)" @onclick:preventDefault="true"><CadIcon Name="@(Sketch.Hidden?"eye-off":"eye")" /></button>
+        <button class="tree-edit" title="编辑草图" aria-label="编辑草图" disabled="@(Disabled || EditingId is not null)" @onclick="() => OnEditSketch.InvokeAsync(Sketch.Id)" @onclick:preventDefault="true"><CadIcon Name="sketch" /></button>
+        <button class="tree-delete" title="删除草图" aria-label="删除草图" disabled="@(Disabled||(EditingId is not null&&EditingId!=Sketch.Id))" @onclick="()=>OnDeleteSketch.InvokeAsync(Sketch.Id)" @onclick:preventDefault="true" @onclick:stopPropagation="true"><CadIcon Name="delete" /></button>
+    </summary>
+    <div class="history-children">
+        @foreach (var e in Sketch.Entities)
+        {
+            <details @key="e.Id" class="history-branch entity-branch" open>
+            <summary><button class="history-row entity-row @(SelectedEntityId == e.Id ? "selected" : "")" disabled="@(Disabled || (EditingId is not null && EditingId != Sketch.Id))" @onclick="() => OnEntity.InvokeAsync((Sketch.Id, e.Id))" @ondblclick="() => OnEditEntity.InvokeAsync((Sketch.Id, e.Id))" @onclick:preventDefault="true">
+                <CadIcon Name="@(e.Kind=="line"&&e.Construction?"reference-line":e.Kind)" /><span>@(e.Kind switch { "circle"=>"圆", "slot"=>"长圆槽", "ellipse"=>"椭圆","arc"=>"圆弧","polygon"=>"多边形","line"=>e.Construction?"参考线":"直线", _=>"矩形" }) @(Sketch.Entities.IndexOf(e) + 1)</span><small>@(e.DisplayEdges.Count+e.ModelDimensions.Count) 尺寸</small>
+            </button><button class="tree-delete" title="删除图元" aria-label="删除图元" disabled="@(Disabled||(EditingId is not null&&EditingId!=Sketch.Id))" @onclick="()=>OnDeleteEntity.InvokeAsync((Sketch.Id,e.Id))" @onclick:preventDefault="true" @onclick:stopPropagation="true"><CadIcon Name="delete" /></button></summary>
+            <div class="history-children">
+                @foreach (var index in e.DisplayEdges)
+                {
+                    <button class="history-row dimension-row" disabled="@(Disabled || (EditingId is not null && EditingId != Sketch.Id))" @onclick="() => OnDimension.InvokeAsync((Sketch.Id,e.Id,index))"><CadIcon Name="dimension" /><span>@DimensionText(e,index)</span><small>驱动</small></button>
+                }
+                @foreach(var d in e.ModelDimensions) { <button class="history-row dimension-row" disabled="@Disabled" @onclick="()=>OnDimension.InvokeAsync((Sketch.Id,e.Id,d.Index))"><CadIcon Name="dimension" /><span>@(d.ReferenceEntityId is null?"实体—草图":"草图—草图") @d.Distance.ToString("0.##")</span><small>驱动</small></button> }
+                @foreach(var relation in e.Coincidences) {
+                    <div @key="relation.Id" class="constraint-tree-row"><button class="history-row dimension-row" disabled="@(Disabled||(EditingId is not null&&EditingId!=Sketch.Id))" @onclick="()=>OnEntity.InvokeAsync((Sketch.Id,e.Id))"><CadIcon Name="align" /><span>@relation.Description</span></button><button class="tree-delete" title="解除此约束，保留图元" aria-label="@($"解除{relation.Description}")" disabled="@(Disabled||(EditingId is not null&&EditingId!=Sketch.Id))" @onclick="()=>OnDeleteCoincidence.InvokeAsync((Sketch.Id,e.Id,relation.Id))" @onclick:stopPropagation="true"><CadIcon Name="delete" /></button></div>
+                }
+                @if(e.FixedPoint!="none") { <button class="history-row dimension-row" disabled="@Disabled" @onclick="()=>OnEntity.InvokeAsync((Sketch.Id,e.Id))"><CadIcon Name="align" /><span>固定点约束</span></button> }
+                @if(e.ReferenceLineId is not null) { <button class="history-row dimension-row" disabled="@Disabled" @onclick="()=>OnEntity.InvokeAsync((Sketch.Id,e.Id))"><CadIcon Name="dimension" /><span>参考距离 @e.ReferenceOffset.ToString("0.##")</span></button> }
+            </div>
+            </details>
+        }
+        @if (Sketch.Entities.Count == 0) { <div class="history-empty">尚无图元</div> }
+    </div>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public CadSketch Sketch { get; set; } = default!;
+    [Parameter] public string? SelectedSketchId { get; set; }
+    [Parameter] public string? SelectedEntityId { get; set; }
+    [Parameter] public string? EditingId { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Shared { get; set; }
+    [Parameter] public EventCallback<string> OnSketch { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId)> OnEntity { get; set; }
+    [Parameter] public EventCallback<string> OnEditSketch { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId)> OnEditEntity { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId,int Edge)> OnDimension { get; set; }
+    [Parameter] public EventCallback<string> OnToggleVisibility { get; set; }
+    [Parameter] public EventCallback<string> OnDeleteSketch { get; set; }
+    [Parameter] public EventCallback<(string SketchId,string EntityId)> OnDeleteEntity { get; set; }
+    [Parameter] public EventCallback<(string SketchId,string EntityId,string ConstraintId)> OnDeleteCoincidence { get; set; }
+    static string DimensionText(SketchEntity e,int i) => e.Kind=="arc"?$"半径 R{e.Radius:0.##}":e.Kind=="polygon"?$"边长 {2*e.Radius*Math.Sin(Math.PI/e.Sides):0.##}":e.Kind=="ellipse"?$"轴径 {(i==0?e.Width:e.Height):0.##}":e.Kind=="circle"?$"直径 Ø{e.Radius*2:0.##}":e.Kind=="line"?$"长度 {Math.Sqrt(e.Width*e.Width+e.Height*e.Height):0.##}":e.Kind=="slot"?$"{(i==0?"总长":"槽宽")} {(i==0?e.Width:e.Height):0.##}":$"{(i%2==0?"宽度":"高度")} {(i%2==0?e.Width:e.Height):0.##}";
+}

@@ -1,0 +1,89 @@
+﻿@using BlazorCAD.Models
+<div class="history-tree" aria-label="建模操作树">
+    <details class="history-branch" open>
+        <summary><span class="history-row root-row" @ondblclick="()=>OnRename.InvokeAsync()"><CadIcon Name="file" /><strong>@Document.Name</strong><small>零件</small></span><button class="tree-edit" title="重命名零件" aria-label="重命名零件" disabled="@Disabled" @onclick="()=>OnRename.InvokeAsync()" @onclick:preventDefault="true" @onclick:stopPropagation="true"><CadIcon Name="sketch" /></button></summary>
+        <div class="history-children">
+            <details class="history-branch reference-branch">
+                <summary><span class="history-row"><CadIcon Name="plane" /><span>基准几何</span></span></summary>
+                <div class="history-children">
+                    @foreach (var p in new[] { "XY", "XZ", "YZ" })
+                    {
+                        <button class="history-row reference-row" disabled="@(!PickingPlane || Disabled)" @onclick="() => OnPlane.InvokeAsync(p)"><span class="plane-dot @p.ToLowerInvariant()"></span><span>@p 基准面</span></button>
+                    }
+                </div>
+            </details>
+            @foreach(var body in Bodies){
+                <details class="history-branch" open><summary class="body-list-row"><button class="history-row @(SelectedBodyId==body.Id?"selected":"")" disabled="@Disabled" @onclick="()=>OnBody.InvokeAsync(body.Id)" @onclick:preventDefault="true"><CadIcon Name="box" /><span>@body.Name</span><small>@body.FeatureIds.Count 步</small></button><button class="tree-delete" title="删除实体及关联步骤" disabled="@(Disabled||EditingId is not null)" @onclick="()=>OnDeleteBody.InvokeAsync(body.Id)" @onclick:preventDefault="true"><CadIcon Name="delete" /></button></summary>
+                    <div class="history-children">
+                        @foreach(var step in Document.Features.Where(feature=>body.FeatureIds.Contains(feature.Id))){<button class="history-row" disabled="@(Disabled||EditingId is not null)" @onclick="()=>OnFeature.InvokeAsync(step.Id)" @ondblclick="()=>OnEditFeature.InvokeAsync(step.Id)"><CadIcon Name="@(step.Mode=="extrude"?(step.Kind=="cut"?"cut":"extrude"):step.Mode)" /><span>@step.Label @(Document.Features.IndexOf(step)+1)</span><small>@Limit(step)</small></button>}
+                        @if(Document.Materials.TryGetValue(body.Id,out var material)){<button class="history-row dimension-row" disabled="@Disabled" @onclick="()=>OnBody.InvokeAsync(body.Id)"><CadIcon Name="box" /><span>材质 · @MaterialName(material.Preset)</span><small>@(material.TextureId is null?"独立参数":"已贴图")</small></button>}
+                    </div>
+                </details>
+            }
+            @if (Document.Features.Count > 0)
+            {
+                <details class="history-branch body-branch" open>
+                    <summary><span class="history-row body-row"><CadIcon Name="box" /><strong>建模步骤</strong><small>@Document.Features.Count 步</small></span></summary>
+                    <div class="history-children">
+                        @foreach (var feature in Document.Features)
+                        {
+                            var sketch = Document.Sketches.FirstOrDefault(s => s.Id == feature.SketchId);
+                            <details @key="feature.Id" class="history-branch feature-branch" open>
+                                <summary><button class="history-row @(SelectedFeatureId == feature.Id ? "selected" : "")" disabled="@(Disabled || PickingPlane || EditingId is not null)" @onclick="() => OnFeature.InvokeAsync(feature.Id)" @ondblclick="() => OnEditFeature.InvokeAsync(feature.Id)" @onclick:preventDefault="true"><CadIcon Name="@(feature.Mode=="extrude"?(feature.Kind=="cut"?"cut":"extrude"):feature.Mode)" /><span>@feature.Label @(Document.Features.IndexOf(feature) + 1)</span><small>@Limit(feature)</small></button><button class="tree-edit" title="编辑特征" aria-label="编辑特征" disabled="@(Disabled || PickingPlane || EditingId is not null)" @onclick="() => OnEditFeature.InvokeAsync(feature.Id)" @onclick:preventDefault="true"><CadIcon Name="sketch" /></button><button class="tree-delete" title="删除特征" aria-label="删除特征" disabled="@(Disabled||PickingPlane||EditingId is not null)" @onclick="()=>OnDeleteFeature.InvokeAsync(feature.Id)" @onclick:preventDefault="true" @onclick:stopPropagation="true"><CadIcon Name="delete" /></button></summary>
+                                <div class="history-children">
+                                    @if (sketch is not null&&feature.Mode!="chamfer")
+                                    {
+                                        <SketchBranch Sketch="sketch" SelectedSketchId="@SelectedSketchId" SelectedEntityId="@SelectedEntityId" EditingId="@EditingId" Disabled="@(Disabled || PickingPlane)" Shared="@(Document.Features.Count(f => f.SketchId == sketch.Id) > 1)" OnSketch="OnSketch" OnEntity="OnEntity" OnEditSketch="OnEditSketch" OnEditEntity="OnEditEntity" OnDimension="OnDimension" OnToggleVisibility="OnToggleVisibility" OnDeleteSketch="OnDeleteSketch" OnDeleteEntity="OnDeleteEntity" OnDeleteCoincidence="OnDeleteCoincidence" />
+                                    }
+                                    @foreach(var auxiliary in Document.Sketches.Where(s=>s.Id!=feature.SketchId&&(s.Id==feature.PathSketchId||s.Id==feature.AxisSketchId||feature.Sections.Any(section=>section.SketchId==s.Id)))) {
+                                        <SketchBranch Sketch="auxiliary" SelectedSketchId="@SelectedSketchId" SelectedEntityId="@SelectedEntityId" EditingId="@EditingId" Disabled="@(Disabled||PickingPlane)" Shared="true" OnSketch="OnSketch" OnEntity="OnEntity" OnEditSketch="OnEditSketch" OnEditEntity="OnEditEntity" OnDimension="OnDimension" OnToggleVisibility="OnToggleVisibility" OnDeleteSketch="OnDeleteSketch" OnDeleteEntity="OnDeleteEntity" OnDeleteCoincidence="OnDeleteCoincidence" />
+                                    }
+                                    @foreach(var section in feature.Sections.Where(section=>section.Face is not null)) {
+                                        <div class="history-row"><CadIcon Name="loft" /><span>实体平面 · 截面 @(feature.Sections.IndexOf(section)+2)</span></div>
+                                    }
+                                </div>
+                            </details>
+                        }
+                    </div>
+                </details>
+            }
+            @foreach (var sketch in Document.Sketches.Where(s => !Document.Features.Any(f => f.Mode!="chamfer"&&(f.SketchId==s.Id||f.PathSketchId==s.Id||f.AxisSketchId==s.Id||f.Sections.Any(section=>section.SketchId==s.Id)))))
+            {
+                <SketchBranch @key="sketch.Id" Sketch="sketch" SelectedSketchId="@SelectedSketchId" SelectedEntityId="@SelectedEntityId" EditingId="@EditingId" Disabled="@(Disabled || PickingPlane)" OnSketch="OnSketch" OnEntity="OnEntity" OnEditSketch="OnEditSketch" OnEditEntity="OnEditEntity" OnDimension="OnDimension" OnToggleVisibility="OnToggleVisibility" OnDeleteSketch="OnDeleteSketch" OnDeleteEntity="OnDeleteEntity" OnDeleteCoincidence="OnDeleteCoincidence" />
+            }
+            @if (Document.Sketches.Count == 0) { <div class="history-empty">暂无建模步骤<br /><span>新建草图以开始建模</span></div> }
+        </div>
+    </details>
+</div>
+
+@code {
+    [Parameter] public List<CadBodyInfo> Bodies { get; set; } = [];
+    [Parameter] public string? SelectedBodyId { get; set; }
+    [Parameter] public EventCallback<string> OnBody { get; set; }
+    [Parameter] public EventCallback<string> OnDeleteBody { get; set; }
+    [Parameter] public EventCallback OnRename { get; set; }
+    [Parameter, EditorRequired] public CadDocument Document { get; set; } = default!;
+    [Parameter] public string? SelectedSketchId { get; set; }
+    [Parameter] public string? SelectedEntityId { get; set; }
+    [Parameter] public string? SelectedFeatureId { get; set; }
+    [Parameter] public string? EditingId { get; set; }
+    [Parameter] public bool PickingPlane { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<string> OnPlane { get; set; }
+    [Parameter] public EventCallback<string> OnSketch { get; set; }
+    [Parameter] public EventCallback<string> OnFeature { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId)> OnEntity { get; set; }
+    [Parameter] public EventCallback<string> OnEditFeature { get; set; }
+    [Parameter] public EventCallback<string> OnEditSketch { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId)> OnEditEntity { get; set; }
+    [Parameter] public EventCallback<(string SketchId, string EntityId,int Edge)> OnDimension { get; set; }
+    [Parameter] public EventCallback<string> OnToggleVisibility { get; set; }
+    [Parameter] public EventCallback<string> OnDeleteSketch { get; set; }
+    [Parameter] public EventCallback<(string SketchId,string EntityId)> OnDeleteEntity { get; set; }
+    [Parameter] public EventCallback<(string SketchId,string EntityId,string ConstraintId)> OnDeleteCoincidence { get; set; }
+    [Parameter] public EventCallback<string> OnDeleteFeature { get; set; }
+    static string MaterialName(string preset)=>preset switch {"steel"=>"不锈钢","aluminum"=>"铝合金","copper"=>"铜","brass"=>"黄铜","iron"=>"铸铁","paint"=>"工业烤漆","plastic"=>"工程塑料","rubber"=>"橡胶",_=>preset};
+    static string Limit(CadFeature f) => f.Mode=="chamfer"?$"{(f.EdgeTreatment=="fillet"?"R":"距离 ")}{f.Depth:0.##} · {Math.Max(1,f.ChamferEdges.Count)} 边": f.Mode=="revolve"?$"{f.Angle:0.##}°":f.Mode=="loft"?$"{f.Sections.Count+1} 截面":f.Mode=="sweep"?(f.ThinWall?$"薄壁 {f.WallThickness:0.##} mm":"沿路径"):f.EndCondition switch { "throughAll" => "贯穿", "upToFace" => "到面", _ => $"{f.Depth:0.##} mm" };
+}
+
+

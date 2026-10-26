@@ -1,0 +1,39 @@
+﻿@inject IJSRuntime JS
+@inject CadCircuitState CircuitState
+@implements IAsyncDisposable
+<div class="ribbon-group feature-palette"><div class="ribbon-commands">
+    @foreach(var kind in new[]{"extrude","cut"}){
+        var id=prefix+kind;var mode=lastChoice[kind];
+        <div class="palette-family"><button class="palette-main" disabled="@(Disabled||!(mode=="sweep"?CanSweep:mode=="loft"?CanLoft:CanGenerate)||kind=="cut"&&!HasSolid)" @onclick="()=>Choose(mode,kind)"><CadIcon Name="@(mode=="extrude"?(kind=="cut"?"cut":"extrude"):mode)" /><span>@Label(mode,kind)</span></button><button id="@(id+"-anchor")" class="palette-expand" disabled="@Disabled" title="@(kind=="cut"?"切除特征":"凸台与基体")" aria-label="@(kind=="cut"?"切除特征":"凸台与基体")" aria-haspopup="menu" aria-controls="@id" aria-expanded="false" @onclick="()=>Open(id)">⌄</button></div>
+        <div id="@id" class="sketch-tool-menu" popover="auto" role="menu"><div class="tool-menu-heading">@(kind=="cut"?"切除材料":"凸台 / 基体")</div>
+            @foreach(var item in Modes){<button class="tool-menu-item @(item==mode?"selected":"")" role="menuitem" disabled="@(Disabled||!(item=="sweep"?CanSweep:item=="loft"?CanLoft:CanGenerate)||kind=="cut"&&!HasSolid)" @onclick="()=>Choose(item,kind,id)"><CadIcon Name="@(item=="extrude"?(kind=="cut"?"cut":"extrude"):item)" /><span><strong>@Label(item,kind)</strong><small>@Hint(item)</small></span></button>}
+        </div>
+    }
+    <button class="ribbon-command" disabled="@(Disabled||!HasSolid)" @onclick='()=>Choose("chamfer","cut")'><CadIcon Name="chamfer" /><span>倒角 / 圆角</span></button>
+</div><div class="ribbon-caption">实体特征</div></div>
+@code {
+    [Parameter] public bool CanGenerate{get;set;}
+    [Parameter] public bool CanLoft{get;set;}
+    [Parameter] public bool CanSweep{get;set;}
+    [Parameter] public bool HasSolid{get;set;}
+    [Parameter] public bool Disabled{get;set;}
+    [Parameter] public EventCallback<(string Mode,string Kind)> OnStart{get;set;}
+    readonly string prefix="feature-tools-"+Guid.NewGuid().ToString("N");
+    readonly Dictionary<string,string> lastChoice=new(){{"extrude","extrude"},{"cut","extrude"}};
+    static readonly string[] Modes=["extrude","revolve","sweep","loft"];
+    IJSObjectReference? module;
+    bool disposed;
+    static string Label(string mode,string kind)=>(mode switch{"revolve"=>"旋转","sweep"=>"扫描","loft"=>"放样",_=>"拉伸"})+(kind=="cut"?"切除":"凸台");
+    static string Hint(string mode)=>mode switch{"revolve"=>"封闭截面绕轴旋转","sweep"=>"闭合截面沿直线或曲线路径逐层推进","loft"=>"依次连接多个封闭截面",_=>"沿草图法线生成材料"};
+    async Task Open(string id){
+        if(Disabled||disposed||!CircuitState.IsConnected)return;
+        try{module??=await JS.InvokeAsync<IJSObjectReference>("import","./toolbar-menu.js");if(disposed||!CircuitState.IsConnected)return;await module.InvokeVoidAsync("show",id,id+"-anchor");}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();}catch(OperationCanceledException){}
+    }
+    async Task Choose(string mode,string kind,string? id=null){
+        if(Disabled||disposed||!CircuitState.IsConnected)return;
+        try{if(id is not null&&module is not null)await module.InvokeVoidAsync("close",id);if(disposed||!CircuitState.IsConnected)return;if(mode!="chamfer")lastChoice[kind]=mode;await OnStart.InvokeAsync((mode,kind));}
+        catch(JSDisconnectedException){CircuitState.MarkDisconnected();}catch(OperationCanceledException){}
+    }
+    public ValueTask DisposeAsync(){disposed=true;module=null;return ValueTask.CompletedTask;}
+}
