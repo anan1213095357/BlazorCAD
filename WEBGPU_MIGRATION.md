@@ -31,3 +31,9 @@
 新增 tests/engine-regression.mjs 与 npm run test:engine 入口，覆盖四元数/矩阵/相机往返、射线、双孔截面面积、闭合拉伸体积和拾取、手工预览矩阵保留；用例已编写但未执行。
 
 需要实际验证的顺序：上述 CPU 用例；GPU 初始化；空场景及正交/透视相机；矩形/圆/曲线草图及拾取；加载保存模型；同次相邻边倒角；二次/三次倒角；拖动尺寸；调试遮挡线；材质和自定义纹理；反复切换项目与设备丢失后的资源释放。源码依赖移除完成不代表这些运行行为已通过验证。
+
+## 新建草图读取 controls.target 失败
+
+静态定位：WGSL 中错误使用了保留字 meta 作为变量名（规范 https://www.w3.org/TR/WGSL/#reserved-words），会使渲染器在着色器初始化阶段拒绝。该阶段位于相机与控制器创建之前。Home 的 finally 随后清除 initializing，使新建草图重新可点；cameraView 未检查视图就绪，最终读取未创建的 controls.target，掩盖了先前的着色器错误。
+
+修复：变量改为 seamHeader；JS 保存初始化 Promise 和原始错误，update 与 cameraView 等待初始化成功；页面只有初始化完成才标记 viewReady，失败时保留原错误并不允许开始草图事务。自写 Camera 同时补齐 clone，用于视角过渡，保留投影参数与独立的变换对象，避免此处修复后立刻出现 clone 缺失错误。相机复制回归用例已补充，浏览器回归源码等待 update Promise；未运行测试、构建或浏览器。

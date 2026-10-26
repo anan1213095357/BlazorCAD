@@ -21,7 +21,7 @@ try{
   const target=project?doc.features.filter(f=>f.mode==='loft').at(-1):doc.features.find(f=>f.id==='body'),all=g.solidEdgeOptions(g.buildSolid(doc)).filter(e=>[e.faceA.featureId,e.faceB.featureId].includes(target.id)),height=Math.max(...all.flatMap(e=>[e.a.z,e.b.z])),edges=all.filter(e=>Math.abs(e.a.z-height)<1e-5&&Math.abs(e.b.z-height)<1e-5),distance=project?1:2;
   const feature={id:'feature-preview',kind:'cut',mode:'chamfer',sketchId:target.sketchId,edgeTreatment:'chamfer',topologyBevel:true,visualOnly:false,depth:distance,chamferAngle:45,chamferEdges:edges.map(e=>({kind:'line',faceA:e.faceA,faceB:e.faceB,segment:e.segment}))};
   ui={operation:'cut',featureMode:'chamfer',featureDraft:feature,sketchId:target.sketchId,regionKeys:[],distance,endCondition:'blind',tool:'select'};
-  await cad.prepareDocument(doc);cad.update(doc,ui);cad.fit(true);
+  await cad.prepareDocument(doc);await cad.update(doc,ui);cad.fit(true);
   const end=performance.now()+15000;while(!events.some(e=>e.name==='UpdateEdgePreview'&&e.args[5]===true)&&performance.now()<end)await new Promise(r=>setTimeout(r,30));
   const preview=events.filter(e=>e.name==='UpdateEdgePreview');
   if(!preview.some(e=>e.args[5]===true))throw new Error('preview not accepted: '+JSON.stringify(preview));
@@ -38,7 +38,7 @@ try{
   const {cad,g,doc,feature,ui,events}=window.__bevelSession;
   const saved={...doc,features:[...doc.features,{...feature,id:'saved',depth:ui.distance}]};
   const start=performance.now();await cad.prepareDocument(saved);const confirmMs=performance.now()-start;
-  cad.update(saved,{...ui,operation:null,featureDraft:null});cad.fit(true);
+  await cad.update(saved,{...ui,operation:null,featureDraft:null});cad.fit(true);
   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
   document.getElementById('test-panel').hidden=true;
   return {preview:events.filter(e=>e.name==='UpdateEdgePreview'),confirmMs,distance:ui.distance,requests:window.__edgeRequests,polygons:g.buildSolid(saved).length,canvas:document.getElementById('bevel-test').querySelector('canvas').width};

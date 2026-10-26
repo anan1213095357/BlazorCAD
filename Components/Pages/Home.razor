@@ -1,4 +1,4 @@
-﻿@page "/"
+@page "/"
 @using BlazorCAD.Models
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Forms
@@ -19,7 +19,7 @@
     <nav class="toolbar ribbon" aria-label="建模工具栏">
         <div class="ribbon-group sketch-lifecycle">
             <div class="ribbon-commands">
-                <button class="ribbon-command primary-sketch @(editing is not null||pickingSketchPlane?"active":"")" aria-label="@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")" title="@(editing is not null?"完成编辑；有图元保留草图，没有图元直接退出":pickingSketchPlane?"完成编辑并取消选面":"编辑选中草图，或选择一个面开始绘制")" disabled="@(operation is not null||initializing||documentBusy)" @onclick="ToggleSketchEditing"><CadIcon Name="@(editing is not null||pickingSketchPlane?"finish":"sketch")" /><span>@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")</span></button>
+                <button class="ribbon-command primary-sketch @(editing is not null||pickingSketchPlane?"active":"")" aria-label="@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")" title="@(editing is not null?"完成编辑；有图元保留草图，没有图元直接退出":pickingSketchPlane?"完成编辑并取消选面":"编辑选中草图，或选择一个面开始绘制")" disabled="@(operation is not null||initializing||documentBusy||!viewReady)" @onclick="ToggleSketchEditing"><CadIcon Name="@(editing is not null||pickingSketchPlane?"finish":"sketch")" /><span>@(editing is not null||pickingSketchPlane?"完成编辑":"编辑草图")</span></button>
             </div><div class="ribbon-caption">草图</div>
         </div>
         <SketchPalette SelectedTool="@tool" Disabled="@(editing is null||operation is not null||initializing||documentBusy)" OnSelect="SetTool" />
@@ -312,7 +312,7 @@
     string? projectDeleteError;
     CadDeletionPlan? deletionPlan;
     string? deletionError;
-    bool documentBusy,initializing=true,disposed;
+    bool documentBusy,initializing=true,disposed,viewReady;
     bool projectRestoreFailed;
     bool CanUseBrowser=>!disposed&&CircuitState.IsConnected;
     string? projectNameMode;
@@ -394,6 +394,7 @@
         try {
             module=await JS.InvokeAsync<IJSObjectReference>("import","./cad.js");if(!CanUseBrowser)return;reference=DotNetObjectReference.Create(this);
             await BrowserVoidAsync("init","cad-canvas",reference);
+            viewReady=true;
             await RestoreProject();
             await Render();if(doc.Sketches.Count>0||doc.Features.Count>0)await Camera(editing is null?"iso":"sketch");RefreshUi();
         }catch(JSDisconnectedException){CircuitState.MarkDisconnected();}
@@ -487,6 +488,7 @@
     bool EditingBlocked()
     {
         if(!CanUseBrowser)return true;
+        if(!initializing&&!viewReady)return true;
         if(!initializing&&!documentBusy&&!saving)return false;
         message=initializing?"正在准备编辑视图，请稍候":"上一项修改仍在处理中，请稍后再操作";return true;
     }
@@ -547,13 +549,14 @@
         RefreshUi();
     }
     async Task ToggleSketchEditing(){
-        if(operation is not null||documentBusy||initializing)return;
+        if(EditingBlocked()||operation is not null)return;
         if(editing is not null){await FinishSketch();return;}
         if(pickingSketchPlane){await CancelSketchPlanePick();return;}
         if(!modelFaceSelected&&selectedSketch?.Finished==true)await EditSketch();else await BeginSketch();
     }
     async Task BeginSketch()
     {
+        if(EditingBlocked())return;
         if (editing is not null || operation is not null || pickingSketchPlane) return;
         if(modelFaceSelected && support?.FeatureId is { } faceFeature && doc.Features.Any(f=>f.Id==faceFeature))
         {
@@ -1261,7 +1264,7 @@
     public Task StlExportProgress(string status,bool finished,int exportId)=>InvokeAsync(()=>{if(disposed||exportId!=stlExportId)return;message=status;if(finished)exportingStl=false;RefreshUi();});
     async Task<bool> InvokeView(string method,params object?[] args)
     {
-        if(module is null||!CanUseBrowser)return false;
+        if(module is null||!CanUseBrowser||!viewReady)return false;
         try{await BrowserVoidAsync(method,args);return true;}
         catch(OperationCanceledException) when(!CanUseBrowser){return false;}
         catch(Exception ex) when(ex is JSException or OperationCanceledException){Logger.LogWarning(ex,"CAD view operation {Method} failed",method);message="操作未完成："+ex.Message;return false;}

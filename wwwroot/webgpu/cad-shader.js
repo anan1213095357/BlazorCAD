@@ -60,10 +60,10 @@ fn safeNormal(v:vec3f)->vec3f {return v*inverseSqrt(max(dot(v,v),1e-20));}
 fn cut(row:u32,col:u32)->vec4f {return cuts[row*14u+col];}
 fn roundRead(row:u32,col:u32)->vec4f {return rounds[row*68u+col];}
 fn roundOutside(row:u32,start:bool,q:vec3f,along:vec4f,r:f32,e:f32,fallback:bool)->bool {
- let index=row*2u+select(1u,0u,start);let meta=roundRead(index,0u);let count=u32(meta.w+.5);
+ let index=row*2u+select(1u,0u,start);let seamHeader=roundRead(index,0u);let count=u32(seamHeader.w+.5);
  if(count<2u){return fallback;}
  let local=(q-along.xyz*select(along.w,0.,start))/r;
- let height=dot(local,meta.xyz);let t=dot(local,along.xyz);var boundary=0.;
+ let height=dot(local,seamHeader.xyz);let t=dot(local,along.xyz);var boundary=0.;
  let first=roundRead(index,2u);let last=roundRead(index,count+1u);
  if(height<first.x-1e-8||height>last.x+1e-8){
   let wall=roundRead(index,1u).xyz;let denominator=dot(wall,along.xyz);
@@ -75,7 +75,7 @@ fn roundOutside(row:u32,start:bool,q:vec3f,along:vec4f,r:f32,e:f32,fallback:bool
    if(height>roundRead(index,middle+2u).x){low=middle;}else{high=middle;}}
   let a=roundRead(index,low+2u);let b=roundRead(index,high+2u);
   let fraction=clamp((height-a.x)/max(1e-12,b.x-a.x),0.,1.);boundary=mix(a.y,b.y,fraction);
-  if(abs(height)<e/r){let width=mix(a.z,b.z,fraction);if(abs(width)>1e-8){boundary*=dot(local,cross(meta.xyz,along.xyz))/width;}}
+  if(abs(height)<e/r){let width=mix(a.z,b.z,fraction);if(abs(width)>1e-8){boundary*=dot(local,cross(seamHeader.xyz,along.xyz))/width;}}
  }
  return select(t>boundary+e/r,t<boundary-e/r,start);
 }

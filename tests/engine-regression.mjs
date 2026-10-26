@@ -12,6 +12,10 @@ near(Math.abs(restored.dot(rotation)),1);
 for(const camera of [new CAD.PerspectiveCamera(38,1.6,.1,1000),new CAD.OrthographicCamera(-10,10,8,-8,.1,1000)]){
  camera.up.set(0,0,1);camera.position.set(20,-30,40);camera.lookAt(v(0,0,0));camera.updateMatrixWorld();
  near(v(2,3,4).project(camera).unproject(camera).distanceTo(v(2,3,4)),0,1e-7);
+ const copied=camera.clone();
+ assert.notEqual(copied,camera);assert.notEqual(copied.position,camera.position);
+ near(v(2,3,4).project(copied).distanceTo(v(2,3,4).project(camera)),0);
+ copied.position.x+=10;assert.notEqual(copied.position.x,camera.position.x);
  const ray=new CAD.Raycaster().setFromCamera(new CAD.Vector2(),camera);
  const hit=ray.ray.intersectPlane(new CAD.Plane().setFromNormalAndCoplanarPoint(v(0,0,1),v(0,0,0)),v(0,0,0));
  assert(hit);near(hit.length(),0,1e-7);

@@ -25,6 +25,7 @@ export class Group extends Object3D {}
 export class Scene extends Group {constructor(){super();this.isScene=true;this.background=null;this.environment=null;}}
 class Camera extends Object3D {
  constructor(){super();this.isCamera=true;this.matrixWorldInverse=new Matrix4();this.projectionMatrix=new Matrix4();this.projectionMatrixInverse=new Matrix4();this.zoom=1;}
+ clone(){const camera=new this.constructor();camera.position.copy(this.position);camera.quaternion.copy(this.quaternion);camera.up.copy(this.up);camera.scale.copy(this.scale);camera.layers.mask=this.layers.mask;for(const name of ['fov','aspect','near','far','zoom','left','right','top','bottom'])if(this[name]!==undefined)camera[name]=this[name];camera.updateProjectionMatrix();camera.updateMatrixWorld();return camera;}
  updateMatrixWorld(){super.updateMatrixWorld();this.matrixWorldInverse.copy(this.matrixWorld).invert();return this;}
 }
 export class PerspectiveCamera extends Camera {

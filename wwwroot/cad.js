@@ -39,6 +39,7 @@ let extendedSketch=null;
 let chamferEdges=[],chamferHover=null,axisEdges=[],axisHover=null;
 let lifecycleObserver=null,viewDisposed=true;
 let viewGeneration=0;
+let viewInitialization=null,viewInitializationError=null;
 let sweepGuide=null,sweepMoving=null,sweepPlaying=null,sweepProgress=0;
 window.addEventListener("pagehide",()=>dispose());
 let sketchCreationFocus=null;
@@ -58,7 +59,17 @@ let navigating=false,needsRender=true,pendingPointerMove=null,lastFrameTime=null
 function requestRender(){needsRender=true;}
 const ray = new CAD.Raycaster(), ink = 0xa2b9f4, accent = 0xc0ec88;
 const V = (x = 0, y = 0, z = 0) => new CAD.Vector3(x, y, z);
-export async function init(id, callback) {if(!viewDisposed)dispose();viewDisposed=false;requestRender();
+export function init(id,callback){
+    viewInitializationError=null;
+    const pending=initializeView(id,callback),generation=viewGeneration;
+    viewInitialization=pending.catch(error=>{if(generation===viewGeneration)viewInitializationError=error;throw error;});
+    return viewInitialization;
+}
+async function requireViewReady(){
+    if(viewInitialization)await viewInitialization;
+    if(viewDisposed||!renderer||!scene||!camera||!controls)throw new Error(viewInitializationError?.message??'三维视图尚未准备完成，请等待视图初始化。');
+}
+async function initializeView(id, callback) {if(!viewDisposed)dispose();viewDisposed=false;requestRender();
     const generation=++viewGeneration;
     host = document.getElementById(id); bridge = callback;
     debugWireframe=new DebugWireframe();debugWireframe.setEnabled(debugMode);
@@ -68,7 +79,7 @@ export async function init(id, callback) {if(!viewDisposed)dispose();viewDispose
     const target=host;
     let created;
     try{created=await CadWebGPURenderer.create({onError:error=>{recordDiagnostic('webgpu',error);bridge?.invokeMethodAsync('CanvasHint','WebGPU：'+error.message);}});}
-    catch(error){viewDisposed=true;lifecycleObserver?.disconnect();recordDiagnostic('webgpu-init',error);throw error;}
+    catch(error){if(generation===viewGeneration){viewDisposed=true;lifecycleObserver?.disconnect();recordDiagnostic('webgpu-init',error);}throw error;}
     if(viewDisposed||host!==target||viewGeneration!==generation){created.dispose();return;}
     renderer=created;
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); host.appendChild(renderer.domElement);
@@ -692,7 +703,7 @@ export function validateGeometry(candidate,constraintsValidated=false) {
     for (const s of candidate.sketches) sketchRegions(s);
     retainDocumentSolid(candidate);return built.length;
 }
-export function update(document,selection) {requestRender();
+export async function update(document,selection) {await requireViewReady();requestRender();
     const previous={doc,ui,group,solid,solidMesh,featurePreviewMesh,cacheKey,renderedKey,currentFrame,viewDocument,previewInfo,modelEdgeCache,floorVisible:floor.visible,shadowVisible:shadowFloor.visible};
     try {
         const result=measure('scene-update',()=>updateScene(document,selection),{polygons:solid.length,editing:!!selection.editingId});
@@ -1269,7 +1280,7 @@ function setCameraProjection(orthographic){
     camera=next;camera.updateProjectionMatrix();camera.updateMatrixWorld(true);createControls(target);controls.enabled=enabled;if(depthGizmo)depthGizmo.camera=camera;requestRender();
 }
 function setOrthographicSpan(span){if(!camera?.isOrthographicCamera)return;const half=Math.max(.001,span)/2;camera.zoom=1;camera.top=half;camera.bottom=-half;camera.left=-half*camera.aspect;camera.right=half*camera.aspect;camera.updateProjectionMatrix();}
-export function cameraView(view) {requestRender();
+export async function cameraView(view) {await requireViewReady();requestRender();
     interruptCameraTransition();cancelDraw();setCameraProjection(view==='sketch');
     if(view==='planes')sketchCreationFocus={
         point:centerViewOnPlane(V(0,0,1),V())??controls.target.clone(),

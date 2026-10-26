@@ -20,7 +20,7 @@ try{
   const cad=await import('/cad.js');window.cad=cad;window.exportEvents=[];
   await cad.init('cad-test',{invokeMethodAsync:async(name,...args)=>{if(name==='StlExportProgress')window.exportEvents.push(args);return null;}});
   await cad.prepareLoadedDocument(document);
-  cad.update(document,{operation:null,editingId:null,editingFeatureId:null,sketchId:null,profileId:null,regionKeys:[],tool:'select',featureMode:'extrude',distance:20,endCondition:'blind',featureDraft:{mode:'extrude',sections:[]}});
+  await cad.update(document,{operation:null,editingId:null,editingFeatureId:null,sketchId:null,profileId:null,regionKeys:[],tool:'select',featureMode:'extrude',distance:20,endCondition:'blind',featureDraft:{mode:'extrude',sections:[]}});
  },project);
  const started=performance.now(),downloadPromise=page.waitForEvent('download',{timeout:60000});
  await page.evaluate(()=>window.cad.exportStl('current-project',1));
