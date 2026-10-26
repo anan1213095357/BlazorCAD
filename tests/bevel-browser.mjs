@@ -5,7 +5,7 @@ const browser=await chromium.launch({channel:'msedge',headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1200,height:800}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.route('http://127.0.0.1:5189/',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><script type="importmap">{"imports":{"three":"/vendor/three.core.js"}}</script><link rel="stylesheet" href="/app.css"></head><body></body></html>'}));
+ await page.route('http://127.0.0.1:5189/',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><link rel="stylesheet" href="/app.css"></head><body></body></html>'}));
  await page.goto('http://127.0.0.1:5189/');
  const project=process.env.BEVEL_PROJECT?JSON.parse(fs.readFileSync(process.env.BEVEL_PROJECT,'utf8')).document:null;
  const handle=await page.evaluate(async({hollow,project})=>{

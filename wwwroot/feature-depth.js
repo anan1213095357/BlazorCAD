@@ -1,4 +1,4 @@
-﻿import * as THREE from 'three';
+import * as CAD from './engine/core.js';
 
 // Depth changes stay local while dragging; only the released value crosses to Blazor.
 export class FeatureDepth {
@@ -13,7 +13,7 @@ export class FeatureDepth {
         this.root.append(this.canvas);host.appendChild(this.root);
         this.readout=document.createElement('div');this.readout.className='feature-depth-readout';this.readout.dataset.featureDepth='';this.readout.hidden=true;this.readout.append(this.valueLabel,this.hint,this.error);host.appendChild(this.readout);
         this.grip=document.createElement('button');this.grip.type='button';this.grip.className='feature-depth-grip';this.grip.dataset.featureDepth='';this.grip.textContent='▲';this.grip.title='拖动调整深度；方向正对视线时上下拖动';this.grip.setAttribute('aria-label','特征深度游标');this.grip.hidden=true;host.appendChild(this.grip);
-        this.arrow=new THREE.ArrowHelper(new THREE.Vector3(0,0,1),new THREE.Vector3(),20,0xc0ec88,3,1.5);
+        this.arrow=new CAD.ArrowHelper(new CAD.Vector3(0,0,1),new CAD.Vector3(),20,0xc0ec88,3,1.5);
         this.arrow.visible=false;this.arrow.traverse(o=>{o.raycast=()=>{};if(o.material){o.material.depthTest=false;o.material.depthWrite=false;}o.renderOrder=14;});scene.add(this.arrow);
         for(const [element,mode] of [[this.canvas,'axis'],[this.grip,'axis']]){
             element.addEventListener('pointerdown',event=>this.start(event,mode));

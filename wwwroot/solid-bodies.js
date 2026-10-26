@@ -1,17 +1,17 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 const cache=new WeakMap();
 export function connectedBodies(polygons){
     if(cache.has(polygons))return cache.get(polygons);
     const parent=polygons.map((_,i)=>i),vertices=new Map(),find=i=>{while(parent[i]!==i){parent[i]=parent[parent[i]];i=parent[i];}return i;};
     polygons.forEach((polygon,i)=>{for(const p of polygon.vertices){const key=[p.x,p.y,p.z].map(v=>Math.round(v/1e-5)).join('/');if(vertices.has(key)){const a=find(i),b=find(vertices.get(key));parent[a]=b;}else vertices.set(key,i);}});
     const groups=new Map();polygons.forEach((p,i)=>{const root=find(i);if(!groups.has(root))groups.set(root,[]);groups.get(root).push(p);});
-    let result=[...groups.values()].map(faces=>({polygons:faces,featureIds:[...new Set([...new Set(faces.map(p=>p.tag.bodyFeatures??p.tag.featureId))].flatMap(value=>Array.isArray(value)?value:[value]))],box:new THREE.Box3().setFromPoints(faces.flatMap(p=>p.vertices))}));const volume=body=>body.polygons.reduce((sum,p)=>sum+p.vertices.slice(1,-1).reduce((v,b,i)=>v+p.vertices[0].dot(b.clone().cross(p.vertices[i+2]))/6,0),0);
-    for(const cavity of result.filter(body=>volume(body)<-1e-6)){const enclosing=result.filter(body=>body!==cavity&&volume(body)>1e-6&&contains(body,cavity.polygons[0].vertices[0])).sort((a,b)=>a.box.getSize(new THREE.Vector3()).length()-b.box.getSize(new THREE.Vector3()).length())[0];if(enclosing){for(const polygon of cavity.polygons)enclosing.polygons.push(polygon);enclosing.featureIds=[...new Set([...enclosing.featureIds,...cavity.featureIds])];result=result.filter(body=>body!==cavity);}}
+    let result=[...groups.values()].map(faces=>({polygons:faces,featureIds:[...new Set([...new Set(faces.map(p=>p.tag.bodyFeatures??p.tag.featureId))].flatMap(value=>Array.isArray(value)?value:[value]))],box:new CAD.Box3().setFromPoints(faces.flatMap(p=>p.vertices))}));const volume=body=>body.polygons.reduce((sum,p)=>sum+p.vertices.slice(1,-1).reduce((v,b,i)=>v+p.vertices[0].dot(b.clone().cross(p.vertices[i+2]))/6,0),0);
+    for(const cavity of result.filter(body=>volume(body)<-1e-6)){const enclosing=result.filter(body=>body!==cavity&&volume(body)>1e-6&&contains(body,cavity.polygons[0].vertices[0])).sort((a,b)=>a.box.getSize(new CAD.Vector3()).length()-b.box.getSize(new CAD.Vector3()).length())[0];if(enclosing){for(const polygon of cavity.polygons)enclosing.polygons.push(polygon);enclosing.featureIds=[...new Set([...enclosing.featureIds,...cavity.featureIds])];result=result.filter(body=>body!==cavity);}}
     cache.set(polygons,result);return result;
 }
 function contains(body,point){
     if(!body.box.clone().expandByScalar(1e-5).containsPoint(point))return false;
-    const ray=new THREE.Ray(point,new THREE.Vector3(.819,.337,.464).normalize()),hit=new THREE.Vector3(),distances=[];
+    const ray=new CAD.Ray(point,new CAD.Vector3(.819,.337,.464).normalize()),hit=new CAD.Vector3(),distances=[];
     for(const polygon of body.polygons)for(let i=1;i<polygon.vertices.length-1;i++)if(ray.intersectTriangle(polygon.vertices[0],polygon.vertices[i],polygon.vertices[i+1],false,hit)){const d=hit.distanceTo(point);if(d<1e-5)return true;if(!distances.some(v=>Math.abs(v-d)<1e-5))distances.push(d);}
     return distances.length%2===1;
 }

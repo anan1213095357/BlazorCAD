@@ -18,6 +18,7 @@ struct Vertex {
  @location(6) faceNormal:vec3f, @location(7) facePoint:vec3f,
  @location(8) start:vec3f, @location(9) end:vec3f,
  @location(10) corner:vec2f, @location(11) bary:vec3f,
+ @location(12) uvMotion:vec2f,
 }
 struct Varying {
  @builtin(position) position:vec4f,
@@ -35,7 +36,10 @@ fn safeNormal(v:vec3f)->vec3f {return v*inverseSqrt(max(dot(v,v),1e-20));}
  let world=draw.model*vec4f(local,1);
  var clip=draw.viewProjection*world;
  out.stroke=vec2f(0);
- if(draw.flags.w>0.5){
+ if(draw.flags.w>1.5){
+  clip=vec4f(clip.xy+v.corner*draw.viewport.z/draw.viewport.xy*clip.w,clip.zw);
+  out.stroke=v.corner;
+ }else if(draw.flags.w>0.5){
   let a=draw.viewProjection*draw.model*vec4f(v.start,1);
   let b=draw.viewProjection*draw.model*vec4f(v.end,1);
   let direction=(b.xy/b.w-a.xy/a.w)*draw.viewport.xy;
@@ -50,7 +54,7 @@ fn safeNormal(v:vec3f)->vec3f {return v*inverseSqrt(max(dot(v,v),1e-20));}
  out.world=world.xyz;out.local=local;
  out.normal=safeNormal((draw.normalMatrix*vec4f(v.normal,0)).xyz);
  out.faceNormal=v.faceNormal;out.facePoint=v.facePoint;
- out.uv=v.uv;out.seam=v.seam;out.bary=v.bary;
+ out.uv=v.uv+v.uvMotion*draw.live.z;out.seam=v.seam;out.bary=v.bary;
  return out;
 }
 fn cut(row:u32,col:u32)->vec4f {return cuts[row*14u+col];}
@@ -155,20 +159,22 @@ fn light(n:vec3f,v:vec3f,l:vec3f,base:vec3f,rough:f32,metal:f32)->vec3f {
   if(removed(in.local,row,faceNormal,facePoint)){discard;}
  }
  var base=draw.color.rgb;var opacity=draw.color.a;
- if(draw.flags.w>.5){
+ if(draw.flags.w>1.5){
+  let distance=length(in.stroke);if(distance>1.){discard;}opacity*=1.-smoothstep(.85,1.,distance);
+ }else if(draw.flags.w>.5){
   if(draw.viewport.w>.5&&glmod(in.stroke.y,13.)>8.){discard;}
   base=mix(vec3f(.035,.075,.11),base,1.-smoothstep(.48,.7,abs(in.stroke.x)));
   opacity*=1.-smoothstep(.86,1.,abs(in.stroke.x));
  }
  if(draw.style.x>.5){
-  var texel=textureSampleLevel(image,imageSampler,textureUv(in.uv),0.).rgb;
+  var texel=textureSampleLevel(image,imageSampler,textureUv(in.uv),0.);
   if(draw.textureOptions.x>.5){
    let weights=pow(abs(safeNormal(in.normal)),vec3f(6));let blend=weights/max(dot(weights,vec3f(1)),.0001);
-   texel=textureSampleLevel(image,imageSampler,textureUv(in.local.yz),0.).rgb*blend.x
-    +textureSampleLevel(image,imageSampler,textureUv(in.local.xz),0.).rgb*blend.y
-    +textureSampleLevel(image,imageSampler,textureUv(in.local.xy),0.).rgb*blend.z;
+   texel=textureSampleLevel(image,imageSampler,textureUv(in.local.yz),0.)*blend.x
+    +textureSampleLevel(image,imageSampler,textureUv(in.local.xz),0.)*blend.y
+    +textureSampleLevel(image,imageSampler,textureUv(in.local.xy),0.)*blend.z;
   }
-  base*=texel;
+  base*=texel.rgb;opacity*=texel.a;
  }
  var color=base;
  if(draw.surface.z>.5){

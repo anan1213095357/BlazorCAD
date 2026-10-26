@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
-import * as THREE from '../wwwroot/vendor/three.core.js';
+import * as CAD from '../wwwroot/engine/core.js';
 import {exportEdgeTools} from '../wwwroot/geometry.js';
 import {exportMeshOperations} from '../wwwroot/export-mesh-kernel.js';
 import {exportEdgeJunctions} from '../wwwroot/export-edge-junctions.js';
 import {section} from '../wwwroot/edge-section.js';
 
-const v=(x,y,z)=>new THREE.Vector3(x,y,z),feature={id:'round',depth:2,edgeTreatment:'fillet'};
+const v=(x,y,z)=>new CAD.Vector3(x,y,z),feature={id:'round',depth:2,edgeTreatment:'fillet'};
 const edges=[
     {a:v(0,-10,0),b:v(0,0,0),normalA:v(0,0,1),normalB:v(1,0,0)},
     {a:v(-10,0,0),b:v(0,0,0),normalA:v(0,0,1),normalB:v(0,1,0)}
 ];
-const geometry=new THREE.BoxGeometry(10,10,10).toNonIndexed();geometry.translate(-5,-5,-5);
+const geometry=new CAD.BoxGeometry(10,10,10).toNonIndexed();geometry.translate(-5,-5,-5);
 const points=geometry.getAttribute('position'),stock=[];
-for(let i=0;i<points.count;i+=3)stock.push({vertices:[0,1,2].map(j=>new THREE.Vector3().fromBufferAttribute(points,i+j))});
+for(let i=0;i<points.count;i+=3)stock.push({vertices:[0,1,2].map(j=>new CAD.Vector3().fromBufferAttribute(points,i+j))});
 const result=await exportMeshOperations(stock,[{subtract:true,tools:exportEdgeTools(feature,edges)}]);
 const incidence=new Map();
 for(const face of result){
@@ -27,10 +27,10 @@ for(const face of result){
 }
 assert([...incidence.values()].every(([count,balance])=>count===2&&balance===0));
 // A valid round has the prescribed cylindrical profile right up to its seam.
-const meshGeometry=new THREE.BufferGeometry().setFromPoints(result.flatMap(face=>face.vertices));
-const mesh=new THREE.Mesh(meshGeometry,new THREE.MeshBasicMaterial({side:THREE.DoubleSide}));mesh.updateMatrixWorld();
+const meshGeometry=new CAD.BufferGeometry().setFromPoints(result.flatMap(face=>face.vertices));
+const mesh=new CAD.Mesh(meshGeometry,new CAD.MeshBasicMaterial({side:CAD.DoubleSide}));mesh.updateMatrixWorld();
 for(const t of [.15,.5,1,1.5,1.85]){
-    const hits=new THREE.Raycaster(v(-t,-t,1),v(0,0,-1)).intersectObject(mesh);
+    const hits=new CAD.Raycaster(v(-t,-t,1),v(0,0,-1)).intersectObject(mesh);
     assert(hits.length,'missing surface at the shared round seam');
     const expected=-2+Math.sqrt(4-(2-t)**2);
     assert(Math.abs(hits[0].point.z-expected)<.005,'round profile changed at the seam');

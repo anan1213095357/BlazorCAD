@@ -1,6 +1,6 @@
 import {edgeEndPlanes} from './edge-end-planes.js';
 import {joinEdgeBands} from './edge-junctions.js';
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {section} from './edge-section.js';
 import {bandEnd,bandOrigin,bandSamples,sectionSample} from './edge-band-layout.js';
 import {railContact} from './edge-rail-stitch.js';

@@ -1,17 +1,20 @@
 import {cadShader} from './cad-shader.js';
 
-const fields=[['position',3],['normal',3],['uv',2],['liveOffset',3],['cadEdgeMotion',3],['liveSeamCoordinate',2],['liveFaceNormalAttribute',3],['facePoint',3],['segmentStart',3],['segmentEnd',3],['corner',2],['bary',3]];
-const stride=132,uniformBytes=352;
+const fields=[['position',3],['normal',3],['uv',2],['liveOffset',3],['cadEdgeMotion',3],['liveSeamCoordinate',2],['liveFaceNormalAttribute',3],['facePoint',3],['segmentStart',3],['segmentEnd',3],['corner',2],['bary',3],['cadEdgeUvMotion',2]];
+const stride=140,uniformBytes=352;
 function multiply(a,b){
  const out=new Float32Array(16);
  for(let col=0;col<4;col++)for(let row=0;row<4;row++)for(let k=0;k<4;k++)out[col*4+row]+=a[k*4+row]*b[col*4+k];
  return out;
 }
 function storageData(texture){return texture?.image?.data??new Float32Array(4);}
+function normalTransform(matrix){
+ const e=matrix.elements,a=[e[0],e[1],e[2]],b=[e[4],e[5],e[6]],c=[e[8],e[9],e[10]],cross=(p,q)=>[p[1]*q[2]-p[2]*q[1],p[2]*q[0]-p[0]*q[2],p[0]*q[1]-p[1]*q[0]],x=cross(b,c),y=cross(c,a),z=cross(a,b),det=a.reduce((sum,value,i)=>sum+value*x[i],0),sign=det<0?-1:1;
+ return [x[0]*sign,x[1]*sign,x[2]*sign,0,y[0]*sign,y[1]*sign,y[2]*sign,0,z[0]*sign,z[1]*sign,z[2]*sign,0,0,0,0,1];
+}
 function displayChannel(value){return value<=.0031308?value*12.92:1.055*Math.pow(value,1/2.4)-.055;}
 
-// Native WebGPU renderer. The boundary accepts existing CPU scene objects
-// during migration; no WebGLRenderer, Three WebGPURenderer, or shader chunks.
+// Native WebGPU renderer consuming the in-repository CAD scene and geometry.
 export class CadWebGPURenderer {
  static async create(options={}){
   if(!navigator.gpu)throw new Error('当前浏览器不支持 WebGPU，请使用支持 WebGPU 的 Edge 或 Chrome，并启用硬件加速。');
@@ -78,23 +81,24 @@ export class CadWebGPURenderer {
    depthStencil:{format:'depth24plus',depthWriteEnabled:write,depthCompare:depth,depthBias:topology==='triangle-list'&&material.polygonOffset?Math.round(material.polygonOffsetUnits??-1):0,depthBiasSlopeScale:topology==='triangle-list'&&material.polygonOffset?material.polygonOffsetFactor??-1:0},
   });this.pipelines.set(key,value);return value;
  }
- geometry(source){
-  const signature=Object.entries(source.attributes).map(([name,attribute])=>name+':'+attribute.version+':'+attribute.count).join('/')+'/'+(source.index?.version??0);
+ geometry(source,points=false){
+  const signature=Object.entries(source.attributes).map(([name,attribute])=>name+':'+attribute.version+':'+attribute.count).join('/')+'/'+(source.index?.version??0)+'/'+points;
   const references=[source.index,...Object.values(source.attributes)];
   let cached=this.geometryCache.get(source);if(cached?.signature===signature&&cached.references.length===references.length&&references.every((value,index)=>value===cached.references[index]))return cached;
   const position=source.attributes.position;if(!position)return null;
-  const count=source.index?.count??position.count,data=new Float32Array(count*stride/4),index=source.index;
+  const count=(source.index?.count??position.count)*(points?6:1),data=new Float32Array(count*stride/4),index=source.index;
   const component=(attribute,vertex,axis)=>attribute?.array[vertex*attribute.itemSize+axis]??0;
   for(let i=0;i<count;i++){
-   const vertex=index?index.getX(i):i;let offset=i*stride/4;
+   const input=points?Math.floor(i/6):i,vertex=index?index.getX(input):input;let offset=i*stride/4;
    for(const [name,size] of fields){
     const attribute=source.attributes[name];
     for(let axis=0;axis<size;axis++){
      let value=component(attribute,vertex,axis);
      if(name==='normal'&&!attribute)value=axis===2?1:0;
      if(name==='liveSeamCoordinate'&&!attribute)value=1;
-     if(name==='facePoint')value=component(position,index?index.getX(i-i%3):i-i%3,axis);
+     if(name==='facePoint')value=component(position,points?vertex:index?index.getX(i-i%3):i-i%3,axis);
      if(name==='bary')value=i%3===axis?1:0;
+     if(name==='corner'&&points)value=[[-1,-1],[1,-1],[1,1],[-1,-1],[1,1],[-1,1]][i%6][axis];
      data[offset++]=value;
     }
    }
@@ -124,7 +128,8 @@ export class CadWebGPURenderer {
   let states=this.objectCache.get(object);if(!states){states=new Map();this.objectCache.set(object,states);}
   let state=states.get(material);if(!state){state={buffer:this.device.createBuffer({size:uniformBytes,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),data:new Float32Array(uniformBytes/4)};states.set(material,state);}
   const values=state.data;values.fill(0);values.set(object.matrixWorld.elements,0);values.set(viewProjection,16);
-  values.set(object.matrixWorld.clone().invert().transpose().elements,32);values.set(camera.position.toArray(),48);
+  // Cofactors also remain defined while a depth preview passes through zero.
+  values.set(normalTransform(object.matrixWorld),32);values.set(camera.position.toArray(),48);
   const stroke=material.uniforms?.strokeColor?.value,color=stroke??material.color;
   values.set([color?.r??1,color?.g??1,color?.b??1,material.opacity??1],52);
   state.used=this.frameId;
@@ -133,11 +138,11 @@ export class CadWebGPURenderer {
   values.set([material.metalness??0,material.roughness??.5,material.isMeshPhysicalMaterial||material.isMeshStandardMaterial?1:0,wire?1:0],56);
   values.set([live?.owner.radius.value??0,patch?(live.fixedRadius<0?live.owner.radius.value:live.fixedRadius):0,motion?.delta??0,patch?1:0],60);
   values.set([live?.owner.records.length??0,live?.skip??-1,live?.skipEnd??-1,live?.joined[0]??-1],64);
-  values.set([live?.joined[1]??-1,0,0,stroke?1:0],68);
-  values.set([this.domElement.width,this.domElement.height,(material.uniforms?.strokeWidth?.value??material.linewidth??1)*this.pixelRatio,material.uniforms?.dashed?.value?1:0],72);
+  values.set([live?.joined[1]??-1,0,0,object.isPoints?2:stroke?1:0],68);
+  values.set([this.domElement.width,this.domElement.height,(object.isPoints?(material.size??1):material.uniforms?.strokeWidth?.value??material.linewidth??1)*this.pixelRatio,material.uniforms?.dashed?.value?1:0],72);
   values.set([material.map?1:0,material.toneMapped===false?1:0,live?.closure?1:0,0],76);
   const settings=material.cadSurface??{},angle=(settings.textureAngle??0)*Math.PI/180,sourceImage=material.map?.image;
-  values.set([Math.cos(angle),Math.sin(angle),settings.textureSize??25,sourceImage?.width&&sourceImage?.height?sourceImage.width/sourceImage.height:1],80);
+  values.set([Math.cos(angle),Math.sin(angle),settings.textureSize??(material.isMeshPhysicalMaterial?25:1),sourceImage?.width&&sourceImage?.height?sourceImage.width/sourceImage.height:1],80);
   values.set([settings.mapping==='triplanar'?1:0,settings.environmentStrength??1,0,0],84);
   if(wire){const hidden=material.depthFunc===6;values.set(hidden?[1,.12,.65,1]:[.05,1,.72,1],52);values[77]=1;values[58]=0;}
   this.device.queue.writeBuffer(state.buffer,0,values);
@@ -155,8 +160,9 @@ export class CadWebGPURenderer {
   const viewProjection=multiply(camera.projectionMatrix.elements,camera.matrixWorldInverse.elements),items=[],seen=new Set();
   const walk=object=>{
    if(!object.visible)return;
+   if(object.isSprite){object.quaternion.copy(camera.quaternion);object.updateMatrixWorld();}
    if(object.geometry&&object.material&&object.layers.test(camera.layers)){
-    const materials=Array.isArray(object.material)?object.material:[object.material],geometry=this.geometry(object.geometry);
+    const materials=Array.isArray(object.material)?object.material:[object.material],geometry=this.geometry(object.geometry,object.isPoints);
     if(geometry){const groups=object.geometry.groups.length?object.geometry.groups:[{start:0,count:geometry.count,materialIndex:0}];
      for(const group of groups){const material=materials[group.materialIndex]??materials[0];if(!material?.visible)continue;
       items.push({object,material,geometry,start:group.start,count:Math.min(group.count,geometry.count-group.start),order:object.renderOrder??0,distance:object.matrixWorld.elements.slice(12,15).reduce((sum,value,i)=>sum+(value-camera.position.toArray()[i])**2,0)});}
@@ -171,7 +177,7 @@ export class CadWebGPURenderer {
   for(const item of items){
    if(item.count<=0)continue;const {object,material,geometry}=item;seen.add(object);
    object.onBeforeRender?.(this,scene,camera,object.geometry,material,null);
-   const topology=object.isLineSegments?'line-list':object.isLine?'line-strip':object.isPoints?'point-list':'triangle-list';
+   const topology=object.isLineSegments?'line-list':object.isLine?'line-strip':'triangle-list';
    const state=this.drawState(object,material,camera,viewProjection);
    pass.setPipeline(this.pipeline(material,topology));pass.setBindGroup(0,state.group);pass.setVertexBuffer(0,geometry.buffer);pass.draw(item.count,1,item.start);
    this.info.render.calls++;if(topology==='triangle-list')this.info.render.triangles+=item.count/3;

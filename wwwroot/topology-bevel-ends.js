@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 
 function bevelPlane(edge,feature,origin){
     const tangent=edge.b.clone().sub(edge.a).normalize(),a=tangent.clone().cross(edge.normalA).normalize(),b=tangent.clone().cross(edge.normalB).normalize();
@@ -71,12 +71,12 @@ function clip(faces,n,w,name,controls=[]){
     // Authoritative seam endpoints are inserted first so incidental triangle
     // intersections cannot choose two independent versions of the same point.
     const contained=controls.filter(point=>Math.abs(n.dot(point)-w)<1e-6&&faces.every(face=>{
-        const normal=new THREE.Vector3();for(let i=1;i<face.vertices.length-1;i++)normal.add(face.vertices[i].clone().sub(face.vertices[0]).cross(face.vertices[i+1].clone().sub(face.vertices[0])));
+        const normal=new CAD.Vector3();for(let i=1;i<face.vertices.length-1;i++)normal.add(face.vertices[i].clone().sub(face.vertices[0]).cross(face.vertices[i+1].clone().sub(face.vertices[0])));
         if(normal.lengthSq()<1e-20)return true;normal.normalize();return normal.dot(point.clone().sub(face.vertices[0]))<=1e-6;
     }));
     const points=[];for(const p of [...contained,...cut])if(!points.some(q=>q.distanceToSquared(p)<1e-16))points.push(p);
     if(points.length>=3){
-        const origin=points[0],u=(Math.abs(n.z)<.8?new THREE.Vector3(0,0,1):new THREE.Vector3(0,1,0)).cross(n).normalize(),v=n.clone().cross(u);
+        const origin=points[0],u=(Math.abs(n.z)<.8?new CAD.Vector3(0,0,1):new CAD.Vector3(0,1,0)).cross(n).normalize(),v=n.clone().cross(u);
         const projected=points.map(point=>{const d=point.clone().sub(origin);return {point,x:d.dot(u),y:d.dot(v)};}).sort((a,b)=>a.x-b.x||a.y-b.y);
         const turn=(a,b,c)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
         const half=values=>{const hull=[];for(const item of values){while(hull.length>1){const a=hull.at(-2),b=hull.at(-1),scale=Math.max(epsilon,Math.hypot(b.x-a.x,b.y-a.y)+Math.hypot(item.x-b.x,item.y-b.y));if(turn(a,b,item)>epsilon*scale)break;hull.pop();}hull.push(item);}return hull;};

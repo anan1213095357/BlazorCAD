@@ -19,7 +19,7 @@ import {FeatureDepth} from './feature-depth.js';
 import {attachSolidPicking} from './solid-picking.js';
 import { readDraft, writeDraft, recordDiagnostic } from './cad-recovery.js';
 export { readDraft, writeDraft, recordDiagnostic };
-import * as THREE from 'three';
+import * as CAD from './engine/core.js';
 import { CadControls } from './cad-controls.js';
 import {CadWebGPURenderer} from './webgpu/renderer.js';
 import { buildSolid, retainDocumentSolid, releaseDocumentSolid, importSolidState, featurePolygons, featureEndInfo, solidGeometry, profileShape, resolvePlane, world, documentGeometry, sketchGeometry, coplanarFaces, validateSupportPlanes, solidEdgeOptions, edgeTreatmentOptions, resolveSolidEdge, featureSweepGuide, loftFaceSection, featureDependsOnSketch } from './geometry.js';
@@ -56,8 +56,8 @@ let viewDocument=null,snapCandidates=[],snapElement=null,lastSnap=null;
 const modelSnapCache=new WeakMap();
 let navigating=false,needsRender=true,pendingPointerMove=null,lastFrameTime=null,lastFrameRendered=false;
 function requestRender(){needsRender=true;}
-const ray = new THREE.Raycaster(), ink = 0xa2b9f4, accent = 0xc0ec88;
-const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const ray = new CAD.Raycaster(), ink = 0xa2b9f4, accent = 0xc0ec88;
+const V = (x = 0, y = 0, z = 0) => new CAD.Vector3(x, y, z);
 export async function init(id, callback) {if(!viewDisposed)dispose();viewDisposed=false;requestRender();
     const generation=++viewGeneration;
     host = document.getElementById(id); bridge = callback;
@@ -74,11 +74,11 @@ export async function init(id, callback) {if(!viewDisposed)dispose();viewDispose
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); host.appendChild(renderer.domElement);
     snapElement=document.createElement('div');snapElement.className='snap-feedback';snapElement.setAttribute('aria-hidden','true');
     const marker=document.createElement('i'),text=document.createElement('span');snapElement.append(marker,text);snapElement.hidden=true;host.appendChild(snapElement);
-    scene = new THREE.Scene();edgePreview=new EdgePreview(showEdgeRadiusPreview,(message,data)=>{edgeProfile?.error(message);if(data?.feature&&!data.feature.previewSegments)publishEdgePreview(data.feature,false,message);});edgeProfile=new EdgeProfile(value=>{if(liveFillet){try{liveFillet.set(value);previewInfo={valid:true,min:value,max:value,message:(liveFillet?.bevel?'D ':'R ')+value+' mm'};edgeProfile.error('');}catch(error){edgeProfile.error(error.message);}}else if(!applyFilletMotion(value))pendingEdgeRadius={value,key:edgeProfile.config?.key};requestRender();},commitEdgeRadius);surfaceStudio=new SurfaceStudio(renderer,scene,requestRender); scene.background = new THREE.Color(0x1b2430);
-    camera = new THREE.PerspectiveCamera(38, 1, .1, 20000); camera.up.set(0, 0, 1); camera.position.set(180, -230, 210);
+    scene = new CAD.Scene();edgePreview=new EdgePreview(showEdgeRadiusPreview,(message,data)=>{edgeProfile?.error(message);if(data?.feature&&!data.feature.previewSegments)publishEdgePreview(data.feature,false,message);});edgeProfile=new EdgeProfile(value=>{if(liveFillet){try{liveFillet.set(value);previewInfo={valid:true,min:value,max:value,message:(liveFillet?.bevel?'D ':'R ')+value+' mm'};edgeProfile.error('');}catch(error){edgeProfile.error(error.message);}}else if(!applyFilletMotion(value))pendingEdgeRadius={value,key:edgeProfile.config?.key};requestRender();},commitEdgeRadius);surfaceStudio=new SurfaceStudio(renderer,scene,requestRender); scene.background = new CAD.Color(0x1b2430);
+    camera = new CAD.PerspectiveCamera(38, 1, .1, 20000); camera.up.set(0, 0, 1); camera.position.set(180, -230, 210);
     createControls(V());
-    const ambient=new THREE.HemisphereLight(0xe7edfa, 0x222935, .22);ambient.layers.enable(1);scene.add(ambient);
-    keyLight = new THREE.DirectionalLight(0xfffaf3, 1.2); keyLight.position.set(-80, -100, 200); keyLight.castShadow=true;
+    const ambient=new CAD.HemisphereLight(0xe7edfa, 0x222935, .22);ambient.layers.enable(1);scene.add(ambient);
+    keyLight = new CAD.DirectionalLight(0xfffaf3, 1.2); keyLight.position.set(-80, -100, 200); keyLight.castShadow=true;
     keyLight.layers.enable(1);keyLight.shadow.mapSize.set(2048,2048);keyLight.shadow.radius=3;keyLight.shadow.bias=-.0002; keyLight.shadow.normalBias=.03; scene.add(keyLight);scene.add(keyLight.target);
     renderer.shadowMap.enabled=false;
     createFloor();
@@ -120,8 +120,8 @@ function configureControls() {
     controls.rotateSpeed=1;controls.zoomSpeed=1;controls.panSpeed=1;
     controls.enableRotate=true;controls.enablePan=true;controls.enableZoom=true;
     controls.screenSpacePanning=true;
-    controls.mouseButtons.LEFT=ui?.editingId?null:THREE.MOUSE.ROTATE;
-    controls.mouseButtons.MIDDLE=THREE.MOUSE.ROTATE;controls.mouseButtons.RIGHT=THREE.MOUSE.PAN;
+    controls.mouseButtons.LEFT=ui?.editingId?null:CAD.MOUSE.ROTATE;
+    controls.mouseButtons.MIDDLE=CAD.MOUSE.ROTATE;controls.mouseButtons.RIGHT=CAD.MOUSE.PAN;
 }
 function createControls(target) {
     if(controls) {
@@ -198,26 +198,26 @@ function rebuildSnapCandidates(active) {
         const edges=edgesForSketch(active);
         let candidates=modelSnapCache.get(edges);
         if(!candidates){
-            candidates=modelSnapPoints(edges).map(snap=>({...snap,point:new THREE.Vector2(...snap.point)}));
+            candidates=modelSnapPoints(edges).map(snap=>({...snap,point:new CAD.Vector2(...snap.point)}));
             const faces=new Map();for(const edge of edges){const key=JSON.stringify(edge.referenceFace);if(!faces.has(key))faces.set(key,[]);faces.get(key).push(edge);}
             for(const edge of edges){
                 const [nx,ny]=edge.normal,related=faces.get(JSON.stringify(edge.referenceFace));let low=Infinity,high=-Infinity;
                 for(const item of related)for(const p of [item.a,item.b]){const value=-ny*p[0]+nx*p[1];low=Math.min(low,value);high=Math.max(high,value);}
                 if(high-low<1e-6)continue;
-                candidates.push({kind:'edge',label:'实体边 · 点在线上',segment:[new THREE.Vector2(...edge.a),new THREE.Vector2(...edge.b)],normal:edge.normal,range:[low,high],reference:{kind:'modelEdge',faces:[edge.referenceFace]}});
+                candidates.push({kind:'edge',label:'实体边 · 点在线上',segment:[new CAD.Vector2(...edge.a),new CAD.Vector2(...edge.b)],normal:edge.normal,range:[low,high],reference:{kind:'modelEdge',faces:[edge.referenceFace]}});
             }
             modelSnapCache.set(edges,candidates);
         }
         snapCandidates.push(...candidates);
     }
-    snapCandidates.push({point:new THREE.Vector2(),kind:'origin',label:active.plane.sourceSketchId?'截面中心 · 重合':'草图原点 · 重合',reference:{kind:'origin',faces:[]}});
+    snapCandidates.push({point:new CAD.Vector2(),kind:'origin',label:active.plane.sourceSketchId?'截面中心 · 重合':'草图原点 · 重合',reference:{kind:'origin',faces:[]}});
     for(const entity of active.entities)for(const snap of entitySnapPoints(entity)) {
-        snapCandidates.push({point:new THREE.Vector2(...snap.point),kind:snap.kind,label:snap.label+' · 重合',entityId:entity.id,reference:{kind:'sketch',entityId:entity.id,point:snap.name,faces:[]}});
+        snapCandidates.push({point:new CAD.Vector2(...snap.point),kind:snap.kind,label:snap.label+' · 重合',entityId:entity.id,reference:{kind:'sketch',entityId:entity.id,point:snap.name,faces:[]}});
     }
     const centers=snapCandidates.filter(candidate=>candidate.point&&(candidate.kind==='center'||candidate.reference?.kind?.startsWith('model')));
     if(centers.length){
-        const geometry=new THREE.BufferGeometry().setFromPoints(centers.map(candidate=>world(currentFrame,candidate.point.x,candidate.point.y,.3)));
-        const markers=new THREE.Points(geometry,new THREE.PointsMaterial({color:0xffd68c,size:7,sizeAttenuation:false,depthTest:false,depthWrite:false}));
+        const geometry=new CAD.BufferGeometry().setFromPoints(centers.map(candidate=>world(currentFrame,candidate.point.x,candidate.point.y,.3)));
+        const markers=new CAD.Points(geometry,new CAD.PointsMaterial({color:0xffd68c,size:7,sizeAttenuation:false,depthTest:false,depthWrite:false}));
         markers.renderOrder=12;markers.raycast=()=>{};group.add(markers);
     }
 }
@@ -226,7 +226,7 @@ function targetHover(tag) {
     const key=tag?tag.featureId+'/'+tag.face:'';if(key===targetHoverKey)return;
     clearTargetHover();if(!tag||tag.face==='curved')return;
     targetHoverKey=key;const polygons=coplanarFaces(solid,resolvePlane(viewDocument,tag));
-    targetHoverMesh=new THREE.Mesh(solidGeometry(polygons).geometry,new THREE.MeshBasicMaterial({color:0x7bbffc,transparent:true,opacity:.2,side:THREE.DoubleSide,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-5,polygonOffsetUnits:-5}));group.add(targetHoverMesh);
+    targetHoverMesh=new CAD.Mesh(solidGeometry(polygons).geometry,new CAD.MeshBasicMaterial({color:0x7bbffc,transparent:true,opacity:.2,side:CAD.DoubleSide,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-5,polygonOffsetUnits:-5}));group.add(targetHoverMesh);
 }
 function sketchRegions(sketch) {
     const key = sketchGeometry(sketch), cached = regionCache.get(sketch.id);
@@ -260,9 +260,9 @@ function drawRotationAxis(sketch){
     const guide=sketchStroke([a.clone().addScaledVector(direction,-radius).toArray(),b.clone().addScaledVector(direction,radius).toArray()],identity,0xffc77b,5,true);guide.material.depthTest=false;group.add(guide);
 }
 function rotationAxisDistance(event,a,b){
-    const rect=host.getBoundingClientRect(),mouse=new THREE.Vector2(event.clientX-rect.left,event.clientY-rect.top),p=a.clone().project(camera),q=b.clone().project(camera);
+    const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top),p=a.clone().project(camera),q=b.clone().project(camera);
     if(p.z< -1||p.z>1||q.z< -1||q.z>1)return Infinity;
-    const x=new THREE.Vector2((p.x+1)*rect.width/2,(1-p.y)*rect.height/2),y=new THREE.Vector2((q.x+1)*rect.width/2,(1-q.y)*rect.height/2),delta=y.clone().sub(x),t=THREE.MathUtils.clamp(mouse.clone().sub(x).dot(delta)/(delta.lengthSq()||1),0,1);
+    const x=new CAD.Vector2((p.x+1)*rect.width/2,(1-p.y)*rect.height/2),y=new CAD.Vector2((q.x+1)*rect.width/2,(1-q.y)*rect.height/2),delta=y.clone().sub(x),t=CAD.MathUtils.clamp(mouse.clone().sub(x).dot(delta)/(delta.lengthSq()||1),0,1);
     return mouse.distanceTo(x.addScaledVector(delta,t));
 }
 function rotationAxisAt(event){
@@ -288,26 +288,26 @@ function rotationReferenceStroke(reference){
     stroke.material.depthTest=false;stroke.renderOrder=12;return stroke;
 }
 function configureSweepGuide(feature){
-    sweepGuide=featureSweepGuide(viewDocument,feature);sweepMoving=new THREE.Group();
+    sweepGuide=featureSweepGuide(viewDocument,feature);sweepMoving=new CAD.Group();
     const identity={o:V(),u:V(1,0,0),v:V(0,1,0),n:V(0,0,1)};
     for(const contour of sweepGuide.contours){const closed=[...contour,contour[0]];sweepMoving.add(sketchStroke(closed,identity,0xffd276,6));}
     group.add(sweepMoving);
-    for(let i=0;i<=12;i++){const frame=sweepGuide.at(i/12);for(const contour of sweepGuide.contours){const points=[...contour,contour[0]].map(p=>world(frame,...p));const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0x9dd7de,transparent:true,opacity:.23,depthTest:false,depthWrite:false}));line.renderOrder=4;group.add(line);}}
+    for(let i=0;i<=12;i++){const frame=sweepGuide.at(i/12);for(const contour of sweepGuide.contours){const points=[...contour,contour[0]].map(p=>world(frame,...p));const line=new CAD.Line(new CAD.BufferGeometry().setFromPoints(points),new CAD.LineBasicMaterial({color:0x9dd7de,transparent:true,opacity:.23,depthTest:false,depthWrite:false}));line.renderOrder=4;group.add(line);}}
     setSweepProgress(0);
 }
 function setSweepProgress(progress){
-    if(!sweepGuide||!sweepMoving)return;sweepProgress=THREE.MathUtils.clamp(progress,0,1);const frame=sweepGuide.at(sweepProgress);
+    if(!sweepGuide||!sweepMoving)return;sweepProgress=CAD.MathUtils.clamp(progress,0,1);const frame=sweepGuide.at(sweepProgress);
     sweepMoving.matrixAutoUpdate=false;sweepMoving.matrix.copy(frameMatrix(frame));sweepMoving.matrixWorldNeedsUpdate=true;
     const input=document.getElementById('sweep-progress');if(input)input.value=String(Math.round(sweepProgress*100));const label=document.getElementById('sweep-progress-value');if(label)label.textContent=Math.round(sweepProgress*100)+'%';requestRender();
 }
 function sweepProgressInput(event){if(event.target?.id!=='sweep-progress')return;sweepPlaying=null;setSweepProgress(Number(event.target.value)/100);}
 export function playSweepGuide(){if(!sweepGuide)return;if(sweepPlaying){sweepPlaying=null;return;}if(sweepProgress>=1)setSweepProgress(0);sweepPlaying={start:performance.now(),from:sweepProgress,duration:2400*(1-sweepProgress)};requestRender();}
 function sweepPathAt(event){
-    const rect=host.getBoundingClientRect(),mouse=new THREE.Vector2(event.clientX-rect.left,event.clientY-rect.top),visible=new Set(group.children.map(o=>o.userData.pick?.sketchId).filter(Boolean));let best=null,score=12;
+    const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top),visible=new Set(group.children.map(o=>o.userData.pick?.sketchId).filter(Boolean));let best=null,score=12;
     for(const sketch of doc.sketches.filter(s=>s.finished&&s.id!==ui.sketchId&&visible.has(s.id))){
         let frame;try{frame=resolvePlane(viewDocument,sketch.plane);}catch{continue;}
         for(const entity of sketch.entities.filter(e=>['line','arc','circle','ellipse'].includes(e.kind))){const points=outline(entity).map(p=>world(frame,...p).project(camera));
-            for(let i=0;i<points.length-1;i++){const a=points[i],b=points[i+1];if(a.z< -1||a.z>1||b.z< -1||b.z>1)continue;const p=new THREE.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),q=new THREE.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),d=q.clone().sub(p),t=THREE.MathUtils.clamp(mouse.clone().sub(p).dot(d)/(d.lengthSq()||1),0,1),distance=mouse.distanceTo(p.addScaledVector(d,t));if(distance<score){score=distance;best={sketch,entity,frame};}}
+            for(let i=0;i<points.length-1;i++){const a=points[i],b=points[i+1];if(a.z< -1||a.z>1||b.z< -1||b.z>1)continue;const p=new CAD.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),q=new CAD.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),d=q.clone().sub(p),t=CAD.MathUtils.clamp(mouse.clone().sub(p).dot(d)/(d.lengthSq()||1),0,1),distance=mouse.distanceTo(p.addScaledVector(d,t));if(distance<score){score=distance;best={sketch,entity,frame};}}
         }
     }return best;
 }
@@ -328,13 +328,13 @@ function tangentEdgeChain(seed,edges=chamferEdges){
     }
     return result;
 }
-function chamferChainStroke(edge,color){const object=new THREE.Group();for(const part of tangentEdgeChain(edge))object.add(chamferStroke(part,color));return object;}
+function chamferChainStroke(edge,color){const object=new CAD.Group();for(const part of tangentEdgeChain(edge))object.add(chamferStroke(part,color));return object;}
 function chamferEdgeAt(event,edges=chamferEdges){
-    rayAt(event);const rect=host.getBoundingClientRect(),mouse=new THREE.Vector2(event.clientX-rect.left,event.clientY-rect.top),body=solidMesh?ray.intersectObject(solidMesh,false)[0]:null;let best=null,score=Infinity;
+    rayAt(event);const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top),body=solidMesh?ray.intersectObject(solidMesh,false)[0]:null;let best=null,score=Infinity;
     for(const edge of edges){const points=edge.points??[edge.a,edge.b],count=edge.closed?points.length:points.length-1;
         for(let i=0;i<count;i++){const first=points[i],last=points[(i+1)%points.length],a=first.clone().project(camera),b=last.clone().project(camera);if(a.z>1||b.z>1||a.z< -1||b.z< -1)continue;
-            const p=new THREE.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),q=new THREE.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),delta=q.clone().sub(p),t=THREE.MathUtils.clamp(mouse.clone().sub(p).dot(delta)/(delta.lengthSq()||1),0,1),distance=mouse.distanceTo(p.addScaledVector(delta,t));if(distance>12)continue;
-            const onEdge=new THREE.Vector3();ray.ray.distanceSqToSegment(first,last,new THREE.Vector3(),onEdge);if(body&&!edge.visualBoundary&&ray.ray.origin.distanceTo(onEdge)>body.distance+Math.max(.3,camera.position.distanceTo(controls.target)*.002))continue;
+            const p=new CAD.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),q=new CAD.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),delta=q.clone().sub(p),t=CAD.MathUtils.clamp(mouse.clone().sub(p).dot(delta)/(delta.lengthSq()||1),0,1),distance=mouse.distanceTo(p.addScaledVector(delta,t));if(distance>12)continue;
+            const onEdge=new CAD.Vector3();ray.ray.distanceSqToSegment(first,last,new CAD.Vector3(),onEdge);if(body&&!edge.visualBoundary&&ray.ray.origin.distanceTo(onEdge)>body.distance+Math.max(.3,camera.position.distanceTo(controls.target)*.002))continue;
             if(edge.visualBoundary){const direction=camera.isOrthographicCamera?V(0,0,1).applyQuaternion(camera.quaternion):camera.position.clone().sub(onEdge).normalize(),frames=edge.frames;if(frames[i].normalA.dot(direction)<-.01&&frames[i].normalB.dot(direction)<-.01)continue;}
             const rank=distance+(edge.visualBoundary?-.5:0)+camera.position.distanceTo(onEdge)*1e-5;if(rank<score){score=rank;best=edge;}
         }
@@ -349,17 +349,17 @@ function destroy(object) {
     object.traverse(o => { o.userData.edgeMotionGpu?.dispose();if(!o.userData.sharedGeometry)o.geometry?.dispose(); if (o.material&&!o.userData.sharedMaterial) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.map?.dispose(); m.dispose(); }); });
     object.removeFromParent();
 }
-function frameMatrix(f) { return new THREE.Matrix4().makeBasis(f.u, f.v, f.n).setPosition(f.o); }
+function frameMatrix(f) { return new CAD.Matrix4().makeBasis(f.u, f.v, f.n).setPosition(f.o); }
 function drawReferencePlanes() {
     const colors={XY:0x66b5ff,XZ:0x73d6a2,YZ:0xef8c87};
     for(const reference of ['XY','XZ','YZ']) {
         const f=resolvePlane(doc,{reference}),color=colors[reference],pick={kind:'referencePlane',reference};
-        const geometry=new THREE.PlaneGeometry(100,100);geometry.applyMatrix4(frameMatrix(f));
-        const face=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color,transparent:true,opacity:.1,side:THREE.DoubleSide,depthWrite:false}));
+        const geometry=new CAD.PlaneGeometry(100,100);geometry.applyMatrix4(frameMatrix(f));
+        const face=new CAD.Mesh(geometry,new CAD.MeshBasicMaterial({color,transparent:true,opacity:.1,side:CAD.DoubleSide,depthWrite:false}));
         face.userData.pick=pick;face.userData.planeColor=color;group.add(face);
         const points=[];
         for(let i=-50;i<=50;i+=10)points.push(world(f,i,-50),world(f,i,50),world(f,-50,i),world(f,50,i));
-        const lines=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color,transparent:true,opacity:.4,depthWrite:false}));
+        const lines=new CAD.LineSegments(new CAD.BufferGeometry().setFromPoints(points),new CAD.LineBasicMaterial({color,transparent:true,opacity:.4,depthWrite:false}));
         lines.userData.pick=pick;group.add(lines);
         label(reference+' 平面',reference==='XZ'?58:0,reference==='XZ'?0:58,f,pick);
     }
@@ -369,13 +369,13 @@ function hoverReferencePlane(reference) {
 }
 function createFloor() {
     // The stage is native geometry. No offscreen WebGL Reflector pass.
-    floor=new THREE.Mesh(new THREE.PlaneGeometry(20000,20000),new THREE.MeshBasicMaterial({color:0x263242,transparent:true,opacity:.35,depthWrite:false,side:THREE.DoubleSide}));
+    floor=new CAD.Mesh(new CAD.PlaneGeometry(20000,20000),new CAD.MeshBasicMaterial({color:0x263242,transparent:true,opacity:.35,depthWrite:false,side:CAD.DoubleSide}));
     floor.material.uniforms={radius:{value:1000}};floor.position.z=-8;scene.add(floor);
-    shadowFloor=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));shadowFloor.visible=false;scene.add(shadowFloor);
+    shadowFloor=new CAD.Mesh(new CAD.PlaneGeometry(1,1),new CAD.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));shadowFloor.visible=false;scene.add(shadowFloor);
 }
 
 function updateFloor() {
-    const box=new THREE.Box3();for(const p of solid)for(const v of p.vertices)box.expandByPoint(v);
+    const box=new CAD.Box3();for(const p of solid)for(const v of p.vertices)box.expandByPoint(v);
     const center=box.isEmpty()?V():box.getCenter(V()),size=box.isEmpty()?V(100,100,100):box.getSize(V());
     const span=Math.max(size.length(),100),z=box.isEmpty()?-8:box.min.z-Math.max(.02,span*.0001);
     // Always world XY. Only geometry regeneration changes the stage elevation;
@@ -385,7 +385,7 @@ function updateFloor() {
     keyLight.position.copy(center).add(V(-span, -span, span*2));keyLight.target.position.copy(center);
     const shadowCamera=keyLight.shadow.camera;
     Object.assign(shadowCamera,{near:.1,far:span*6});keyLight.updateMatrixWorld(true);keyLight.target.updateMatrixWorld(true);keyLight.shadow.updateMatrices(keyLight);
-    const lightBounds=new THREE.Box3();
+    const lightBounds=new CAD.Box3();
     if(!box.isEmpty())for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z])lightBounds.expandByPoint(V(x,y,z).applyMatrix4(shadowCamera.matrixWorldInverse));
     const margin=Math.max(2,span*.035);
     Object.assign(shadowCamera,lightBounds.isEmpty()?{left:-span,right:span,top:span,bottom:-span}:{left:lightBounds.min.x-margin,right:lightBounds.max.x+margin,bottom:lightBounds.min.y-margin,top:lightBounds.max.y+margin});
@@ -396,7 +396,7 @@ function sceneInfo(chosen) {
 }
 function addLine(points, color, pick, f, z = .1, dashed=false) {
     const positions = points.map(p => world(f, p[0], p[1], z));
-    const o = new THREE.Line(new THREE.BufferGeometry().setFromPoints(positions), dashed?new THREE.LineDashedMaterial({color,dashSize:3,gapSize:2,depthTest:!ui.editingId}):new THREE.LineBasicMaterial({ color, depthTest: !ui.editingId }));
+    const o = new CAD.Line(new CAD.BufferGeometry().setFromPoints(positions), dashed?new CAD.LineDashedMaterial({color,dashSize:3,gapSize:2,depthTest:!ui.editingId}):new CAD.LineBasicMaterial({ color, depthTest: !ui.editingId }));
     if(dashed)o.computeLineDistances();if (pick) o.userData.pick = pick; o.renderOrder = 5; group.add(o); return o;
 }
 function label(text, x, y, f, pick, dimensionStyle=null) {
@@ -406,7 +406,7 @@ function label(text, x, y, f, pick, dimensionStyle=null) {
     const width=canvas.width;c.fillStyle=dimensionStyle?'#142231ed':'#172130';
     if(dimensionStyle){c.beginPath();c.roundRect(4,4,width-8,88,14);c.fill();c.strokeStyle=dimensionStyle;c.lineWidth=2;c.stroke();}else c.fillRect(0,0,width,96);
     c.font='500 43px Segoe UI';c.textAlign='center';c.textBaseline='middle';c.fillStyle=dimensionStyle??'#d6e9b8';c.fillText(text,width/2,48);
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+    const sprite = new CAD.Sprite(new CAD.SpriteMaterial({ map: new CAD.CanvasTexture(canvas), depthTest: false }));
     sprite.position.copy(world(f, x, y, .4)); sprite.scale.set(dimensionStyle?width/512*25:25, 4.7, 1); sprite.userData.pick = pick; sprite.renderOrder = 10; group.add(sprite);return sprite;
 }
 function edgePoints(e,i) {
@@ -445,15 +445,15 @@ function clearDimension(sid,pid,edge) {
     for(const o of group.children.slice())if(o.userData.dimensionKey===key)destroy(o);
 }
 function pointOnFrame(event,frame) {
-    rayAt(event);const hit=V(),plane=new THREE.Plane().setFromNormalAndCoplanarPoint(frame.n,frame.o);
+    rayAt(event);const hit=V(),plane=new CAD.Plane().setFromNormalAndCoplanarPoint(frame.n,frame.o);
     if(Math.abs(ray.ray.direction.dot(frame.n))<.02||!ray.ray.intersectPlane(plane,hit))return null;
-    const delta=hit.sub(frame.o);return new THREE.Vector2(delta.dot(frame.u),delta.dot(frame.v));
+    const delta=hit.sub(frame.o);return new CAD.Vector2(delta.dot(frame.u),delta.dot(frame.v));
 }
 function drawSketchEntity(s,e,f) {
     const first=group.children.length,active=ui.editingId===s.id,selected=ui.profileId===e.id||dragging?.entity.id===e.id;
     if(active&&!e.construction&&!['line','arc'].includes(e.kind)) {
-        const geometry=new THREE.ShapeGeometry(profileShape(e),48);geometry.applyMatrix4(frameMatrix(f));
-        const fill=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:selected?0x66d4ff:0x82bfe7,transparent:true,opacity:selected ? .13 : .065,side:THREE.DoubleSide,depthWrite:false,depthTest:false}));
+        const geometry=new CAD.ShapeGeometry(profileShape(e),48);geometry.applyMatrix4(frameMatrix(f));
+        const fill=new CAD.Mesh(geometry,new CAD.MeshBasicMaterial({color:selected?0x66d4ff:0x82bfe7,transparent:true,opacity:selected ? .13 : .065,side:CAD.DoubleSide,depthWrite:false,depthTest:false}));
         fill.userData.pick={kind:'profile',sketchId:s.id,profileId:e.id};fill.renderOrder=3;group.add(fill);
     }
     const borderColor=selected?0xffd276:active?0x8bdcff:0x63dcff;
@@ -469,8 +469,8 @@ function drawSketchEntity(s,e,f) {
             const matching=points.filter(h=>!!(fixedAnchor&&Math.hypot(h.point[0]-fixedAnchor[0],h.point[1]-fixedAnchor[1])<1e-5)===locked);
             if(!matching.length)continue;
             for(const [size,color] of [[selected?13:11,0x0a1622],[selected?9:7,locked?0xffbd66:0xe7f6ff]]) {
-                const geometry=new THREE.BufferGeometry().setFromPoints(matching.map(h=>world(f,...h.point,.3)));
-                const markers=new THREE.Points(geometry,new THREE.PointsMaterial({color,size,sizeAttenuation:false,depthTest:false,depthWrite:false}));markers.renderOrder=9;markers.raycast=()=>{};group.add(markers);
+                const geometry=new CAD.BufferGeometry().setFromPoints(matching.map(h=>world(f,...h.point,.3)));
+                const markers=new CAD.Points(geometry,new CAD.PointsMaterial({color,size,sizeAttenuation:false,depthTest:false,depthWrite:false}));markers.renderOrder=9;markers.raycast=()=>{};group.add(markers);
             }
         }
     }
@@ -483,10 +483,10 @@ function drawSketch(s) {
     const firstObject=group.children.length;
     const f=resolvePlane(viewDocument,s.plane);
     if(!ui.editingId)for(const region of sketchRegions(s)) {
-        const geometry=new THREE.ShapeGeometry(regionShape(region));geometry.applyMatrix4(frameMatrix(f));
-        const fill=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:0x254b66,transparent:true,opacity:.075,side:THREE.DoubleSide,depthWrite:false,depthTest:!(ui.operation&&ui.featureMode==='loft'),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2}));
+        const geometry=new CAD.ShapeGeometry(regionShape(region));geometry.applyMatrix4(frameMatrix(f));
+        const fill=new CAD.Mesh(geometry,new CAD.MeshBasicMaterial({color:0x254b66,transparent:true,opacity:.075,side:CAD.DoubleSide,depthWrite:false,depthTest:!(ui.operation&&ui.featureMode==='loft'),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2}));
         fill.userData.pick={kind:'region',sketchId:s.id,regionKey:region.key};fill.renderOrder=3;group.add(fill);
-        const highlight=new THREE.Group();highlight.userData.regionOutline=fill.userData.pick;highlight.visible=false;
+        const highlight=new CAD.Group();highlight.userData.regionOutline=fill.userData.pick;highlight.visible=false;
         for(const loop of [region.outer,...region.holes]){
             const points=loop.points.map(p=>[p.x,p.y]);if(!points.length)continue;
             points.push(points[0]);const stroke=sketchStroke(points,f,0xb3efff,5);stroke.material.depthTest=!(ui.operation&&ui.featureMode==='loft');stroke.renderOrder=7;highlight.add(stroke);
@@ -498,8 +498,8 @@ function drawSketch(s) {
 }
 function sketchBorderAt(event,includeHandles=true) {
     const sketch=doc.sketches.find(s=>s.id===ui.editingId);if(!sketch)return null;
-    camera.updateMatrixWorld(true);const rect=host.getBoundingClientRect(),mouse=new THREE.Vector2(event.clientX-rect.left,event.clientY-rect.top);
-    const project=p=>{const v=world(currentFrame,...p).project(camera);return v.z < -1||v.z>1?null:new THREE.Vector2((v.x+1)*rect.width/2,(1-v.y)*rect.height/2);};
+    camera.updateMatrixWorld(true);const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top);
+    const project=p=>{const v=world(currentFrame,...p).project(camera);return v.z < -1||v.z>1?null:new CAD.Vector2((v.x+1)*rect.width/2,(1-v.y)*rect.height/2);};
     let best=null,distance=10;
     if(includeHandles)for(const entity of sketch.entities)for(const h of handles(entity)) {
         const p=project(h.point),d=p?p.distanceTo(mouse):Infinity;
@@ -526,8 +526,8 @@ function sketchBorderAt(event,includeHandles=true) {
 function dimensionPickAt(event) {
     const sketch=doc.sketches.find(s=>s.id===ui.editingId);if(!sketch)return null;
     const own=sketchBorderAt(event,false),rect=host.getBoundingClientRect();let model=null,best=10;
-    const project=p=>{const v=world(currentFrame,...p).project(camera);return v.z < -1||v.z>1?null:new THREE.Vector2((v.x+1)*rect.width/2,(1-v.y)*rect.height/2);};
-    const mouse=new THREE.Vector2(event.clientX-rect.left,event.clientY-rect.top);
+    const project=p=>{const v=world(currentFrame,...p).project(camera);return v.z < -1||v.z>1?null:new CAD.Vector2((v.x+1)*rect.width/2,(1-v.y)*rect.height/2);};
+    const mouse=new CAD.Vector2(event.clientX-rect.left,event.clientY-rect.top);
     for(const edge of edgesForSketch(sketch)) {
         const a=project(edge.a),b=project(edge.b);if(!a||!b)continue;
         const d=b.clone().sub(a),length=d.lengthSq(),t=length?Math.max(0,Math.min(1,mouse.clone().sub(a).dot(d)/length)):0;
@@ -656,8 +656,8 @@ function importPreparedDocument(candidate,result){
     if(result.visualHistory)importVisualEdgeHistory(result.visualHistory);
     if(!result.state)return;
     const polygons=importSolidState(candidate,result.state),draw=result.draw;if(!draw)return;
-    const geometry=new THREE.BufferGeometry();
-    for(const [name,size] of [['position',3],['normal',3],['uv',2],['tangent',4]])geometry.setAttribute(name,new THREE.BufferAttribute(draw[name],size));
+    const geometry=new CAD.BufferGeometry();
+    for(const [name,size] of [['position',3],['normal',3],['uv',2],['tangent',4]])geometry.setAttribute(name,new CAD.BufferAttribute(draw[name],size));
     for(const item of draw.groups)geometry.addGroup(item.start,item.count,item.materialIndex);
     geometry.computeBoundingSphere();
     const ordered=Array.from(draw.order,index=>polygons[index]),tags=Array.from(draw.tagSources,index=>polygons[index].tag);
@@ -773,7 +773,7 @@ function updateScene(document, selection) {
     liveFillet?.dispose();liveFillet=null;liveFilletKey=null;visualTreatment?.dispose();visualTreatment=null;
     debugWireframe?.clear();
     edgePreview?.dispose();pendingEdgeRadius=null;
-    doc = document; ui = selection; ui.regionKeys ??= [];chamferHover=null;chamferEdges=[];axisEdges=[];axisHover=null;sweepGuide=null;sweepMoving=null;sweepPlaying=null; cancelDraw();clearDimensionSelection();modelEdgeCache=new Map(); clearTargetHover();group = new THREE.Group(); scene.add(group); solidMesh = null;featurePreviewMesh=null;
+    doc = document; ui = selection; ui.regionKeys ??= [];chamferHover=null;chamferEdges=[];axisEdges=[];axisHover=null;sweepGuide=null;sweepMoving=null;sweepPlaying=null; cancelDraw();clearDimensionSelection();modelEdgeCache=new Map(); clearTargetHover();group = new CAD.Group(); scene.add(group); solidMesh = null;featurePreviewMesh=null;
     floor.visible=!ui.pickingSketchPlane;shadowFloor.visible=!ui.pickingSketchPlane;
     for(const id of regionCache.keys())if(!doc.sketches.some(s=>s.id===id))regionCache.delete(id);
     const rollback=ui.editingFeatureId?doc.features.findIndex(f=>f.id===ui.editingFeatureId):ui.editingId?doc.features.findIndex(f=>f.mode!=="chamfer"&&featureDependsOnSketch(doc,f,ui.editingId)):-1;
@@ -783,21 +783,21 @@ function updateScene(document, selection) {
     if (geometryKey !== cacheKey) { solid = buildSolid(viewDocument); cacheKey = geometryKey; updateFloor(); }
     if (solid.length) {
         const {geometry,tags,polygons,bodies}=solidDrawData(doc,solid),materials=bodies.map(body=>surfaceStudio.material(bodyAppearance(doc,body),!!ui.editingId));
-        solidMesh=new THREE.Mesh(geometry,materials);solidMesh.userData.sharedMaterial=true;solidMesh.userData.sharedGeometry=true;solidMesh.userData.tags=tags;attachSolidPicking(solidMesh,polygons);solidMesh.castShadow=true;solidMesh.receiveShadow=true;solidMesh.layers.enable(1);group.add(solidMesh);
-        const selectedBody=bodies.find(body=>body.id===ui.selectedBodyId);if(selectedBody&&!ui.operation&&!ui.editingId&&!viewDocument.features.some(f=>f.mode==='chamfer'&&f.visualOnly)){const edges=solidEdgeOptions(selectedBody.polygons,false),geometry=new THREE.BufferGeometry().setFromPoints(edges.flatMap(edge=>[edge.a,edge.b]));const highlight=new THREE.LineSegments(geometry,new THREE.LineBasicMaterial({color:0xd9bd82,transparent:true,opacity:.72,depthWrite:false}));highlight.raycast=()=>{};highlight.renderOrder=5;group.add(highlight);}
+        solidMesh=new CAD.Mesh(geometry,materials);solidMesh.userData.sharedMaterial=true;solidMesh.userData.sharedGeometry=true;solidMesh.userData.tags=tags;attachSolidPicking(solidMesh,polygons);solidMesh.castShadow=true;solidMesh.receiveShadow=true;solidMesh.layers.enable(1);group.add(solidMesh);
+        const selectedBody=bodies.find(body=>body.id===ui.selectedBodyId);if(selectedBody&&!ui.operation&&!ui.editingId&&!viewDocument.features.some(f=>f.mode==='chamfer'&&f.visualOnly)){const edges=solidEdgeOptions(selectedBody.polygons,false),geometry=new CAD.BufferGeometry().setFromPoints(edges.flatMap(edge=>[edge.a,edge.b]));const highlight=new CAD.LineSegments(geometry,new CAD.LineBasicMaterial({color:0xd9bd82,transparent:true,opacity:.72,depthWrite:false}));highlight.raycast=()=>{};highlight.renderOrder=5;group.add(highlight);}
         if (ui.support?.featureId && !(ui.operation&&ui.featureMode==="chamfer")) {
             const frame=resolvePlane(viewDocument,ui.support),faceBody=selectedBody?.polygons.some(p=>p.tag.featureId===ui.support.featureId&&p.tag.face===ui.support.face)?selectedBody:bodies.find(body=>body.polygons.some(p=>p.tag.featureId===ui.support.featureId&&p.tag.face===ui.support.face)),scope=faceBody?.polygons??solid;
             let shape=null;
             if(ui.selectedFacePoint?.length===3){try{const p=V(...ui.selectedFacePoint).sub(frame.o);shape=loftFaceSection(viewDocument,ui.support,p.dot(frame.u),p.dot(frame.v),scope).shape;}catch(error){recordDiagnostic('face-highlight',error);}}
             const selectedFaces=scope.filter(p=>p.tag.featureId===ui.support.featureId&&p.tag.face===ui.support.face);
-            const geometry=shape?new THREE.ShapeGeometry(shape):solidGeometry(selectedFaces).geometry;if(shape)geometry.applyMatrix4(frameMatrix(frame));
-            const overlay=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:0x73bde8,side:THREE.DoubleSide,transparent:true,opacity:ui.editingId ? .07 : .18,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4}));overlay.userData.edgeClipOverlay=true;overlay.raycast=()=>{};overlay.renderOrder=3;group.add(overlay);
+            const geometry=shape?new CAD.ShapeGeometry(shape):solidGeometry(selectedFaces).geometry;if(shape)geometry.applyMatrix4(frameMatrix(frame));
+            const overlay=new CAD.Mesh(geometry,new CAD.MeshBasicMaterial({color:0x73bde8,side:CAD.DoubleSide,transparent:true,opacity:ui.editingId ? .07 : .18,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4}));overlay.userData.edgeClipOverlay=true;overlay.raycast=()=>{};overlay.renderOrder=3;group.add(overlay);
             if(shape&&!viewDocument.features.some(f=>f.mode==='chamfer'&&f.visualOnly))for(const path of [shape,...shape.holes]){const points=path.getPoints(64).map(p=>[p.x,p.y]);if(points.length){points.push(points[0]);const border=sketchStroke(points,frame,0x9cdeff,5);border.raycast=()=>{};border.renderOrder=6;group.add(border);}}
 
         }
         if(ui.operation && ui.endCondition==='upToFace' && ui.targetFace?.featureId) {
             const polygons=solid.filter(p=>p.tag.featureId===ui.targetFace.featureId&&p.tag.face===ui.targetFace.face);
-            const overlay=new THREE.Mesh(solidGeometry(polygons).geometry,new THREE.MeshBasicMaterial({color:0x7bbffc,transparent:true,opacity:.36,side:THREE.DoubleSide,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4}));group.add(overlay);
+            const overlay=new CAD.Mesh(solidGeometry(polygons).geometry,new CAD.MeshBasicMaterial({color:0x7bbffc,transparent:true,opacity:.36,side:CAD.DoubleSide,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4}));group.add(overlay);
         }
     }
     const active = doc.sketches.find(s => s.id === ui.editingId);
@@ -808,8 +808,8 @@ function updateScene(document, selection) {
     rebuildSnapCandidates(active);
     if(ui.pickingSketchPlane) drawReferencePlanes();
     if (ui.support && !ui.support.featureId && !active && !chosen && !ui.pickingSketchPlane) {
-        const geometry = new THREE.PlaneGeometry(100, 100); geometry.applyMatrix4(frameMatrix(currentFrame));
-        const planeMesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: .05, side: THREE.DoubleSide, depthWrite: false })); group.add(planeMesh);
+        const geometry = new CAD.PlaneGeometry(100, 100); geometry.applyMatrix4(frameMatrix(currentFrame));
+        const planeMesh = new CAD.Mesh(geometry, new CAD.MeshBasicMaterial({ color: accent, transparent: true, opacity: .05, side: CAD.DoubleSide, depthWrite: false })); group.add(planeMesh);
     }
     if(active?.plane.sourceSketchId){
         const source=doc.sketches.find(s=>s.id===active.plane.sourceSketchId);
@@ -822,7 +822,7 @@ function updateScene(document, selection) {
     }
     if(ui.operation&&ui.featureMode==='loft')for(const section of ui.featureDraft.sections??[]){
         if(!section.face)continue;
-        try{const selected=loftFaceSection(viewDocument,section.face,section.faceX,section.faceY,solid),basis=resolvePlane(viewDocument,section.face),geometry=new THREE.ShapeGeometry(selected.shape);geometry.applyMatrix4(frameMatrix(basis));const mesh=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:0x49cf9a,transparent:true,opacity:.38,side:THREE.DoubleSide,depthWrite:false,depthTest:false}));mesh.renderOrder=4;group.add(mesh);}catch(error){recordDiagnostic('loft-face',error);}
+        try{const selected=loftFaceSection(viewDocument,section.face,section.faceX,section.faceY,solid),basis=resolvePlane(viewDocument,section.face),geometry=new CAD.ShapeGeometry(selected.shape);geometry.applyMatrix4(frameMatrix(basis));const mesh=new CAD.Mesh(geometry,new CAD.MeshBasicMaterial({color:0x49cf9a,transparent:true,opacity:.38,side:CAD.DoubleSide,depthWrite:false,depthTest:false}));mesh.renderOrder=4;group.add(mesh);}catch(error){recordDiagnostic('loft-face',error);}
     }
     previewInfo={valid:false,message:ui.operation?'请选择封闭区域':''};
     if(ui.operation&&ui.featureMode==='loft'&&!ui.featureDraft.sections.length)previewInfo={valid:false,message:'请在三维视口选择下一个闭合草图区域或实体平面截面。'};
@@ -848,7 +848,7 @@ function updateScene(document, selection) {
             previewInfo=featureEndInfo(viewDocument,ghost);
             const polygons=featurePolygons(viewDocument,ghost);
             const finalSolid=ui.operation!=="cut"||ui.featureMode!=="extrude"?buildSolid({...viewDocument,features:[...viewDocument.features,ghost]}):null;
-            const mesh=new THREE.Mesh(solidGeometry(polygons).geometry,new THREE.MeshBasicMaterial({color:ui.operation==='cut'?0xf08c82:accent,transparent:true,opacity:.33,side:THREE.DoubleSide,depthWrite:false}));
+            const mesh=new CAD.Mesh(solidGeometry(polygons).geometry,new CAD.MeshBasicMaterial({color:ui.operation==='cut'?0xf08c82:accent,transparent:true,opacity:.33,side:CAD.DoubleSide,depthWrite:false}));
             mesh.layers.enable(1);group.add(mesh);featurePreviewMesh=mesh;mesh.userData.depth=ui.distance*(ui.reversed?-1:1);if(ui.featureMode==='sweep')try{configureSweepGuide(ghost);}catch(error){recordDiagnostic('sweep-guide',error);}
             }
         } catch(error) {previewInfo={valid:false,message:error.message};}
@@ -876,7 +876,7 @@ function configureEdgeProfile(){
     if(!ui.operation||ui.featureMode!=='chamfer'||!ui.featureDraft.chamferEdges?.length){edgeProfile.configure(null);return;}
     const reference=ui.featureDraft.chamferEdges[0],matches=(a,b)=>a?.featureId===b?.featureId&&a?.face===b?.face;
     const edge=chamferEdges.find(edge=>(edge.kind??'line')===(reference.kind??'line')&&edge.segment===reference.segment&&(matches(edge.faceA,reference.faceA)&&matches(edge.faceB,reference.faceB)||matches(edge.faceA,reference.faceB)&&matches(edge.faceB,reference.faceA)));
-    if(!edge){edgeProfile.configure(null);return;}const theta=Math.PI-Math.acos(THREE.MathUtils.clamp(edge.normalA.dot(edge.normalB),-1,1));
+    if(!edge){edgeProfile.configure(null);return;}const theta=Math.PI-Math.acos(CAD.MathUtils.clamp(edge.normalA.dot(edge.normalB),-1,1));
     edgeProfile.configure({key:JSON.stringify([ui.editingFeatureId??null,ui.featureDraft.chamferEdges]),value:ui.distance,valid:previewInfo.valid,theta,bevel:ui.featureDraft.edgeTreatment==='chamfer',ratio:Math.tan((ui.featureDraft.chamferAngle??45)*Math.PI/180)});
 }
 function previewEdgeRadius(value){
@@ -889,10 +889,10 @@ function showEdgeRadiusPreview(data){
     if(!ui?.operation||ui.featureMode!=='chamfer'||!solidMesh||!group)return;
     const original=bodyInfo(doc,solid),materials=data.bodies.map(body=>{let index=original.findIndex(source=>source.id===body.id);if(index<0)index=original.findIndex(source=>source.featureIds.some(id=>body.featureIds.includes(id)));return solidMesh.material[Math.max(0,index)];});
     const cpuMotion=data.motion&&!data.feature.topologyBevel;
-    const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.BufferAttribute(cpuMotion?data.position.slice():data.position,3));geometry.setAttribute('normal',new THREE.BufferAttribute(cpuMotion?data.normal.slice():data.normal,3));geometry.setAttribute('uv',new THREE.BufferAttribute(cpuMotion?data.uv.slice():data.uv,2));
-    if(data.tangent)geometry.setAttribute('tangent',new THREE.BufferAttribute(data.tangent,4));
+    const geometry=new CAD.BufferGeometry();geometry.setAttribute('position',new CAD.BufferAttribute(cpuMotion?data.position.slice():data.position,3));geometry.setAttribute('normal',new CAD.BufferAttribute(cpuMotion?data.normal.slice():data.normal,3));geometry.setAttribute('uv',new CAD.BufferAttribute(cpuMotion?data.uv.slice():data.uv,2));
+    if(data.tangent)geometry.setAttribute('tangent',new CAD.BufferAttribute(data.tangent,4));
     for(const item of data.groups)geometry.addGroup(item.start,item.count,item.materialIndex);geometry.computeBoundingSphere();
-    const mesh=new THREE.Mesh(geometry,materials);mesh.userData.sharedMaterial=true;mesh.layers.enable(1);mesh.castShadow=true;mesh.receiveShadow=true;mesh.raycast=()=>{};
+    const mesh=new CAD.Mesh(geometry,materials);mesh.userData.sharedMaterial=true;mesh.layers.enable(1);mesh.castShadow=true;mesh.receiveShadow=true;mesh.raycast=()=>{};
     const gpu=data.feature.topologyBevel&&data.motion?installEdgeMotionGpu(mesh,data.motion):null;
     debugWireframe?.clear();destroy(featurePreviewMesh);featurePreviewMesh=mesh;edgeMotion=data.motion?{data,mesh,gpu,currentRadius:data.feature.depth}:null;group.add(mesh);solidMesh.visible=false;edgeProfile?.error('');if(!data.feature.previewSegments){lastFullEdgeState=data.state;publishEdgePreview(data.feature,true,data.feature.topologyBevel?'实体倒角 · 实际 D '+Number(data.actualDistance.toFixed(4))+' mm':'预览已完成');}syncDebugWireframe();
     const current=edgeProfile?.value;if(Number.isFinite(current)&&current!==data.feature.depth){if(!applyFilletMotion(current)&&edgeProfile?.drag)pendingEdgeRadius={value:current,key:edgeProfile.config?.key};}
@@ -942,9 +942,9 @@ function featureDepthKey(){return JSON.stringify([ui.sketchId,ui.operation,ui.ed
 function configureFeatureDepth(sketch){
     if(!depthGizmo)return;
     if(!ui.operation||ui.featureMode!=='extrude'||ui.endCondition!=='blind'||ui.pickingTarget||!sketch||!featurePreviewMesh){depthGizmo.hide(ui.featureMode==='extrude'&&ui.operation?previewInfo.valid&&ui.regionKeys.length>0&&!ui.pickingTarget:null);return;}
-    const selected=sketchRegions(sketch).filter(r=>ui.regionKeys.includes(r.key)),box=new THREE.Box2();
+    const selected=sketchRegions(sketch).filter(r=>ui.regionKeys.includes(r.key)),box=new CAD.Box2();
     for(const region of selected)for(const point of region.outer.points)box.expandByPoint(point);
-    const center=box.isEmpty()?new THREE.Vector2():box.getCenter(new THREE.Vector2()),frame=resolvePlane(viewDocument,sketch.plane);
+    const center=box.isEmpty()?new CAD.Vector2():box.getCenter(new CAD.Vector2()),frame=resolvePlane(viewDocument,sketch.plane);
     depthGizmo.configure({key:featureDepthKey(),kind:ui.operation,value:ui.distance*(ui.reversed?-1:1),valid:previewInfo.valid,
         origin:world(frame,center.x,center.y),direction:frame.n.clone().multiplyScalar(ui.operation==='cut'?-1:1)});
 }
@@ -965,17 +965,17 @@ async function commitFeatureDepth(value,key){
 }
 function rayAt(e) {
     camera.updateMatrixWorld(true);
-    const r = host.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
+    const r = host.getBoundingClientRect(); ray.setFromCamera(new CAD.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
     ray.params.Line.threshold = Math.max(.5, camera.position.distanceTo(controls.target) / host.clientHeight * 3);
 }
 function localPoint(e,smooth=false) {
-    rayAt(e); const hit = V(); const p = new THREE.Plane().setFromNormalAndCoplanarPoint(currentFrame.n, currentFrame.o);
+    rayAt(e); const hit = V(); const p = new CAD.Plane().setFromNormalAndCoplanarPoint(currentFrame.n, currentFrame.o);
     if (Math.abs(ray.ray.direction.dot(currentFrame.n))<.02 || !ray.ray.intersectPlane(p, hit)) {showSnap(null);return null;}
     const rect=host.getBoundingClientRect();
     const candidates=dragging?snapCandidates.filter(c=>!c.entityId||c.entityId!==dragging.entity.id):snapCandidates;
     const snap=e.altKey?null:closestScreenSnap(candidates,currentFrame,camera,rect.width,rect.height,e.clientX-rect.left,e.clientY-rect.top);
     showSnap(snap);if(snap)return snap.point.clone();
-    const delta = hit.sub(currentFrame.o);return new THREE.Vector2(smooth?delta.dot(currentFrame.u):Math.round(delta.dot(currentFrame.u)),smooth?delta.dot(currentFrame.v):Math.round(delta.dot(currentFrame.v)));
+    const delta = hit.sub(currentFrame.o);return new CAD.Vector2(smooth?delta.dot(currentFrame.u):Math.round(delta.dot(currentFrame.u)),smooth?delta.dot(currentFrame.v):Math.round(delta.dot(currentFrame.v)));
 }
 function down(e) {if(e.target.closest?.('[data-feature-depth]'))return;interruptCameraTransition();requestRender();
     if(!ui)return;
@@ -1046,7 +1046,7 @@ function handleMove(e) {
         host.style.cursor='default';host.dataset.dragHint='';
         if(ui.editingId&&extendedSketch?.owns(ui.tool)){
             const p=localPoint(e);destroy(preview);preview=null;
-            if(p){const paths=extendedSketch.preview(p,ui.polygonSides??6);if(paths.length){preview=new THREE.Group();for(const path of paths)preview.add(sketchStroke(path,currentFrame,accent,6));scene.add(preview);}}
+            if(p){const paths=extendedSketch.preview(p,ui.polygonSides??6);if(paths.length){preview=new CAD.Group();for(const path of paths)preview.add(sketchStroke(path,currentFrame,accent,6));scene.add(preview);}}
             return;
         }
         if(ui.editingId){if(['rectangle','centerRectangle','ellipse','circle','slot','line','referenceLine'].includes(ui.tool))localPoint(e);else showSnap(null);return;}
@@ -1189,7 +1189,7 @@ function loftPickAt(e){
     // The thick sketch border is expanded by its vertex shader. A mesh raycast
     // only sees its unexpanded centreline, so clicks on the visible border used
     // to fall through to the supporting solid. Pick that same border in pixels.
-    const rect=host.getBoundingClientRect(),mouse=new THREE.Vector2(e.clientX-rect.left,e.clientY-rect.top);
+    const rect=host.getBoundingClientRect(),mouse=new CAD.Vector2(e.clientX-rect.left,e.clientY-rect.top);
     let border=null,best=9;
     for(const object of group.children){
         const pick=object.userData.pick;if(!object.visible||pick?.kind!=='region')continue;
@@ -1199,8 +1199,8 @@ function loftPickAt(e){
             const first=loop.points[index],last=loop.points[(index+1)%loop.points.length];
             const a=world(basis,first.x,first.y,.16).project(camera),b=world(basis,last.x,last.y,.16).project(camera);
             if(a.z< -1||a.z>1||b.z< -1||b.z>1)continue;
-            const start=new THREE.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),end=new THREE.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),delta=end.sub(start);
-            const t=THREE.MathUtils.clamp(mouse.clone().sub(start).dot(delta)/(delta.lengthSq()||1),0,1),distance=mouse.distanceTo(start.addScaledVector(delta,t));
+            const start=new CAD.Vector2((a.x+1)*rect.width/2,(1-a.y)*rect.height/2),end=new CAD.Vector2((b.x+1)*rect.width/2,(1-b.y)*rect.height/2),delta=end.sub(start);
+            const t=CAD.MathUtils.clamp(mouse.clone().sub(start).dot(delta)/(delta.lengthSq()||1),0,1),distance=mouse.distanceTo(start.addScaledVector(delta,t));
             if(distance<best){best=distance;border=pick;}
         }
     }
@@ -1220,7 +1220,7 @@ function pickAt(e) {
     return {bodyHit,visible};
 }
 function bounds() {
-    const box = new THREE.Box3();
+    const box = new CAD.Box3();
     if(ui?.pickingSketchPlane)return box.set(V(-60,-60,-60),V(60,60,60));
     if (ui?.editingId || (!solid.length && ui?.sketchId)) {
         const sketch = doc.sketches.find(s => s.id === (ui.editingId ?? ui.sketchId));
@@ -1231,10 +1231,10 @@ function bounds() {
     return box;
 }
 export function fit(modelOnly=false) {if(!camera||!controls)return;interruptCameraTransition();requestRender();
-    const box = modelOnly&&solid.length?new THREE.Box3().setFromPoints(solid.flatMap(p=>p.vertices)):bounds(), center = box.getCenter(V()), size = box.getSize(V());
+    const box = modelOnly&&solid.length?new CAD.Box3().setFromPoints(solid.flatMap(p=>p.vertices)):bounds(), center = box.getCenter(V()), size = box.getSize(V());
     const dir = camera.position.clone().sub(controls.target).normalize();if(dir.lengthSq()<.5)dir.set(1,-1,1).normalize();
     const d = Math.max(size.length(), 60) * 1.85 / Math.min(camera.aspect, 1);
-    controls.target.copy(center); camera.position.copy(center).addScaledVector(dir, d);if(camera.isOrthographicCamera)setOrthographicSpan(2*d*Math.tan(THREE.MathUtils.degToRad(19))); controls.update();
+    controls.target.copy(center); camera.position.copy(center).addScaledVector(dir, d);if(camera.isOrthographicCamera)setOrthographicSpan(2*d*Math.tan(CAD.MathUtils.degToRad(19))); controls.update();
 }
 function interruptCameraTransition(){
     if(!cameraTransition||!camera||!controls)return;
@@ -1249,10 +1249,10 @@ function advanceCameraTransition(now){
     const eased=t*t*t*(10+t*(-15+6*t));
     const target=transition.fromTarget.clone().lerp(transition.toTarget,eased);
     const rotation=transition.fromRotation.clone().slerp(transition.toRotation,eased);
-    const distance=THREE.MathUtils.lerp(transition.fromDistance,transition.toDistance,eased);
+    const distance=CAD.MathUtils.lerp(transition.fromDistance,transition.toDistance,eased);
     controls.target.copy(target);camera.quaternion.copy(rotation);
     camera.position.copy(target).addScaledVector(V(0,0,1).applyQuaternion(rotation),distance);
-    if(camera.isOrthographicCamera)setOrthographicSpan(THREE.MathUtils.lerp(transition.fromSpan,transition.toSpan,eased));
+    if(camera.isOrthographicCamera)setOrthographicSpan(CAD.MathUtils.lerp(transition.fromSpan,transition.toSpan,eased));
     camera.updateMatrixWorld(true);requestRender();
     if(t===1){
         cameraTransition=null;camera.up.copy(transition.up);
@@ -1262,10 +1262,10 @@ function advanceCameraTransition(now){
 function setCameraProjection(orthographic){
     if(!camera||!!camera.isOrthographicCamera===orthographic)return;
     const target=controls.target.clone(),enabled=controls.enabled,aspect=host.clientWidth/Math.max(1,host.clientHeight),distance=Math.max(.1,camera.position.distanceTo(target)),direction=camera.position.clone().sub(target).normalize();
-    const span=camera.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom:2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))/camera.zoom;
-    const next=orthographic?new THREE.OrthographicCamera(-span*aspect/2,span*aspect/2,span/2,-span/2,.1,20000):new THREE.PerspectiveCamera(38,aspect,.1,20000);
+    const span=camera.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom:2*distance*Math.tan(CAD.MathUtils.degToRad(camera.fov/2))/camera.zoom;
+    const next=orthographic?new CAD.OrthographicCamera(-span*aspect/2,span*aspect/2,span/2,-span/2,.1,20000):new CAD.PerspectiveCamera(38,aspect,.1,20000);
     next.aspect=aspect;next.up.copy(camera.up);next.quaternion.copy(camera.quaternion);next.position.copy(camera.position);
-    if(!orthographic)next.position.copy(target).addScaledVector(direction,span/(2*Math.tan(THREE.MathUtils.degToRad(19))));
+    if(!orthographic)next.position.copy(target).addScaledVector(direction,span/(2*Math.tan(CAD.MathUtils.degToRad(19))));
     camera=next;camera.updateProjectionMatrix();camera.updateMatrixWorld(true);createControls(target);controls.enabled=enabled;if(depthGizmo)depthGizmo.camera=camera;requestRender();
 }
 function setOrthographicSpan(span){if(!camera?.isOrthographicCamera)return;const half=Math.max(.001,span)/2;camera.zoom=1;camera.top=half;camera.bottom=-half;camera.left=-half*camera.aspect;camera.right=half*camera.aspect;camera.updateProjectionMatrix();}
@@ -1280,7 +1280,7 @@ export function cameraView(view) {requestRender();
     const active=doc?.sketches.find(sketch=>sketch.id===ui?.editingId);
     if(view==='sketch'&&active&&!active.entities.length){
         const saved=active.plane.featureId?null:sketchCreationFocus;
-        const focus=active.plane.featureId?f.o.clone():saved?new THREE.Plane().setFromNormalAndCoplanarPoint(f.n,f.o).projectPoint(saved.point,V()):centerViewOnPlane(f.n,f.o)??new THREE.Plane().setFromNormalAndCoplanarPoint(f.n,f.o).projectPoint(controls.target,V());
+        const focus=active.plane.featureId?f.o.clone():saved?new CAD.Plane().setFromNormalAndCoplanarPoint(f.n,f.o).projectPoint(saved.point,V()):centerViewOnPlane(f.n,f.o)??new CAD.Plane().setFromNormalAndCoplanarPoint(f.n,f.o).projectPoint(controls.target,V());
         center.copy(focus);distance=Math.max(10,saved?.distance??camera.position.distanceTo(controls.target));
         sketchCreationFocus=null;
     }
@@ -1290,7 +1290,7 @@ export function cameraView(view) {requestRender();
         started:performance.now(),duration:520,
         fromTarget:controls.target.clone(),toTarget:center,
         fromRotation:camera.quaternion.clone(),toRotation:destination.quaternion.clone(),
-        fromDistance:camera.position.distanceTo(controls.target),toDistance:distance,up,fromSpan:camera.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom:0,toSpan:2*distance*Math.tan(THREE.MathUtils.degToRad(19))
+        fromDistance:camera.position.distanceTo(controls.target),toDistance:distance,up,fromSpan:camera.isOrthographicCamera?(camera.top-camera.bottom)/camera.zoom:0,toSpan:2*distance*Math.tan(CAD.MathUtils.degToRad(19))
     };
 }
 export function download(name, content, type) {

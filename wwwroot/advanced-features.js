@@ -1,21 +1,21 @@
 import {circleOf} from './curved-boundary.js';
 import {roundEnd} from './round-junction.js';
 // Section-based solid generation. Returned faces are passed through the existing BSP kernel.
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {outline} from './sketch-tools.js';
 import {faceBoundarySegments} from './snapping.js';
 const EPS=1e-5;
-const v2=p=>new THREE.Vector2(p.x,p.y);
+const v2=p=>new CAD.Vector2(p.x,p.y);
 function clean(points){
     const result=points.map(v2).filter((p,i,a)=>!i||p.distanceToSquared(a[i-1])>EPS*EPS);
     if(result.length>1&&result[0].distanceToSquared(result.at(-1))<EPS*EPS)result.pop();
     let changed=true;while(changed&&result.length>3){changed=false;for(let i=0;i<result.length;i++){const a=result[(i+result.length-1)%result.length],b=result[i],c=result[(i+1)%result.length],ab=b.clone().sub(a),bc=c.clone().sub(b);if(Math.abs(ab.cross(bc))<EPS&&ab.dot(bc)>=0){result.splice(i,1);changed=true;break;}}}
     if(result.length<3)throw new Error('截面轮廓无法闭合。');
-    const tolerance=new THREE.Box2().setFromPoints(result).getSize(new THREE.Vector2()).length()*.003;
-    while(result.length>48){let best=Infinity,index=-1;for(let i=0;i<result.length;i++){const a=result[(i+result.length-1)%result.length],b=result[i],c=result[(i+1)%result.length],d=c.clone().sub(a),t=THREE.MathUtils.clamp(b.clone().sub(a).dot(d)/(d.lengthSq()||1),0,1),error=b.distanceTo(a.clone().addScaledVector(d,t));if(error<best){best=error;index=i;}}if(best>tolerance)throw new Error('截面边界过于复杂，请拆分为多个特征。');result.splice(index,1);}
+    const tolerance=new CAD.Box2().setFromPoints(result).getSize(new CAD.Vector2()).length()*.003;
+    while(result.length>48){let best=Infinity,index=-1;for(let i=0;i<result.length;i++){const a=result[(i+result.length-1)%result.length],b=result[i],c=result[(i+1)%result.length],d=c.clone().sub(a),t=CAD.MathUtils.clamp(b.clone().sub(a).dot(d)/(d.lengthSq()||1),0,1),error=b.distanceTo(a.clone().addScaledVector(d,t));if(error<best){best=error;index=i;}}if(best>tolerance)throw new Error('截面边界过于复杂，请拆分为多个特征。');result.splice(index,1);}
     return result;
 }
-function loops(shape){return [shape,...shape.holes].map((path,i)=>{const points=clean(path.getPoints(24));if((THREE.ShapeUtils.area(points)>0)!==(i===0))points.reverse();return points;});}
+function loops(shape){return [shape,...shape.holes].map((path,i)=>{const points=clean(path.getPoints(24));if((CAD.ShapeUtils.area(points)>0)!==(i===0))points.reverse();return points;});}
 function resample(points,count){
     const lengths=[0];for(let i=0;i<points.length;i++)lengths.push(lengths.at(-1)+points[i].distanceTo(points[(i+1)%points.length]));
     const total=lengths.at(-1);if(total<EPS)throw new Error('放样截面长度为零。');
@@ -46,8 +46,8 @@ function skin(rings,capLoops,{closed=false,planarSides=false,normalRings=null,pl
         }
     }
     if(!closed)for(const [index,name,reverse] of [[0,'bottom',true],[rings.length-1,'top',false]]){
-        const flat=rings[index].flat(),triangles=THREE.ShapeUtils.triangulateShape(capLoops[index===0?0:capLoops.length-1][0],capLoops[index===0?0:capLoops.length-1].slice(1));
-        for(const triangle of triangles){const local=capLoops[index===0?0:capLoops.length-1].flat(),[a,b,c]=triangle.map(i=>local[i]),vertices=triangle.map(i=>flat[i]);if(b.clone().sub(a).cross(c.clone().sub(a))*THREE.ShapeUtils.area(capLoops[index===0?0:capLoops.length-1][0])<0)vertices.reverse();if(reverse)vertices.reverse();addFace(result,vertices,name,minimumAreaSq);}
+        const flat=rings[index].flat(),triangles=CAD.ShapeUtils.triangulateShape(capLoops[index===0?0:capLoops.length-1][0],capLoops[index===0?0:capLoops.length-1].slice(1));
+        for(const triangle of triangles){const local=capLoops[index===0?0:capLoops.length-1].flat(),[a,b,c]=triangle.map(i=>local[i]),vertices=triangle.map(i=>flat[i]);if(b.clone().sub(a).cross(c.clone().sub(a))*CAD.ShapeUtils.area(capLoops[index===0?0:capLoops.length-1][0])<0)vertices.reverse();if(reverse)vertices.reverse();addFace(result,vertices,name,minimumAreaSq);}
     }
     const origin=rings[0][0][0];let volume=0;for(const face of result)for(let index=1;index<face.vertices.length-1;index++)volume+=face.vertices[0].clone().sub(origin).dot(face.vertices[index].clone().sub(origin).cross(face.vertices[index+1].clone().sub(origin)))/6;
     if(Math.abs(volume)<.001)throw new Error('所选截面和参数无法生成有效体积。');
@@ -55,7 +55,7 @@ function skin(rings,capLoops,{closed=false,planarSides=false,normalRings=null,pl
 }
 function straightBoundary(sketch,a,b){
     for(const entity of sketch.entities){if(entity.construction||!['rectangle','polygon','line','slot'].includes(entity.kind))continue;const points=outline(entity),indices=entity.kind==='slot'?[32,65]:Array.from({length:points.length-1},(_,i)=>i);
-        for(const i of indices){const p=new THREE.Vector2(...points[i]),q=new THREE.Vector2(...points[i+1]),direction=q.clone().sub(p),length=direction.length();if(length<EPS)continue;direction.divideScalar(length);
+        for(const i of indices){const p=new CAD.Vector2(...points[i]),q=new CAD.Vector2(...points[i+1]),direction=q.clone().sub(p),length=direction.length();if(length<EPS)continue;direction.divideScalar(length);
             const on=point=>{const delta=point.clone().sub(p),along=delta.dot(direction);return Math.abs(delta.cross(direction))<1e-4&&along>=-EPS&&along<=length+EPS;};if(on(a)&&on(b))return true;
         }
     }return false;
@@ -85,18 +85,18 @@ function pathPoints(doc,feature,frame,world){
     const basis=frame(doc,sketch.plane);let points=curvePoints2D(sketch,feature.pathEntityId).map(p=>world(basis,...p));
     if(feature.pathInterpolation==='spline'){
         const entity=sketch.entities.find(e=>e.id===feature.pathEntityId);if(entity&&entity.kind!=='line')throw new Error('圆弧、圆和椭圆请使用原始路径；样条模式使用连续直线链的顶点作为控制点。');
-        if(points.length>=3){const closed=points[0].distanceToSquared(points.at(-1))<EPS*EPS,control=closed?points.slice(0,-1):points;points=new THREE.CatmullRomCurve3(control,closed,'centripetal').getSpacedPoints(Math.min(96,Math.max(24,control.length*8)));}
+        if(points.length>=3){const closed=points[0].distanceToSquared(points.at(-1))<EPS*EPS,control=closed?points.slice(0,-1):points;points=new CAD.CatmullRomCurve3(control,closed,'centripetal').getSpacedPoints(Math.min(96,Math.max(24,control.length*8)));}
     }
     if(points.length<2)throw new Error('扫描路径长度不足。');if(points.length>130)throw new Error('扫描路径过于复杂，请拆分路径。');return points;
 }
 function thinSweepShape(sketch,feature){
     const thickness=feature.wallThickness;
     if(!Number.isFinite(thickness)||thickness<.1||thickness>1000)throw new Error('薄壁扫描厚度必须为 0.1–1000 mm。');
-    const points=curvePoints2D(sketch,feature.openProfileEntityId,{construction:false,maxCurvePoints:24}).map(p=>new THREE.Vector2(...p));
+    const points=curvePoints2D(sketch,feature.openProfileEntityId,{construction:false,maxCurvePoints:24}).map(p=>new CAD.Vector2(...p));
     if(points.length<2||points[0].distanceToSquared(points.at(-1))<EPS*EPS)throw new Error('薄壁模式请选择开放轮廓；闭合轮廓可用实体扫描。');
     for(let i=points.length-2;i>0;i--){const a=points[i].clone().sub(points[i-1]),b=points[i+1].clone().sub(points[i]);if(Math.abs(a.cross(b))<EPS&&a.dot(b)>0)points.splice(i,1);}
     if(points.length>24)throw new Error('薄壁截面的拐点过多，请拆分为多个扫描特征。');
-    const normals=points.slice(1).map((p,i)=>{const delta=p.clone().sub(points[i]).normalize();return new THREE.Vector2(-delta.y,delta.x);});
+    const normals=points.slice(1).map((p,i)=>{const delta=p.clone().sub(points[i]).normalize();return new CAD.Vector2(-delta.y,delta.x);});
     const offset=distance=>points.map((p,i)=>{
         if(!i)return p.clone().addScaledVector(normals[0],distance);
         if(i===points.length-1)return p.clone().addScaledVector(normals.at(-1),distance);
@@ -110,8 +110,8 @@ function thinSweepShape(sketch,feature){
         const intersects=Math.abs(cross)<EPS?(on(c,a,b)||on(d,a,b)||on(a,c,d)||on(b,c,d)):(()=>{const t=delta.cross(cd)/cross,u=delta.cross(ab)/cross;return t>=-EPS&&t<=1+EPS&&u>=-EPS&&u<=1+EPS;})();
         if(intersects)throw new Error('壁厚导致开放轮廓加厚后自交，请减小厚度或调整轮廓。');
     }
-    if(Math.abs(THREE.ShapeUtils.area(contour))<EPS)throw new Error('开放轮廓无法生成有效的薄壁截面。');
-    const shape=new THREE.Shape(contour);shape.closePath();return shape;
+    if(Math.abs(CAD.ShapeUtils.area(contour))<EPS)throw new Error('开放轮廓无法生成有效的薄壁截面。');
+    const shape=new CAD.Shape(contour);shape.closePath();return shape;
 }
 function sweepFrames(doc,feature,{resolve,world}){
     const sketch=doc.sketches.find(s=>s.id===feature.sketchId),base=resolve(doc,sketch.plane);
@@ -121,14 +121,14 @@ function sweepFrames(doc,feature,{resolve,world}){
         const tangent=points.map((p,i)=>{const previous=i?points[i-1]:closed?points.at(-1):p,next=i<points.length-1?points[i+1]:closed?points[0]:p;const a=p.clone().sub(previous),b=next.clone().sub(p);if(a.lengthSq()<EPS)return b.normalize();if(b.lengthSq()<EPS)return a.normalize();a.normalize();b.normalize();if(a.dot(b)<-.99)throw new Error('扫描路径不能原路折返。');return a.add(b).normalize();});
         const follow=(feature.sweepOrientation??'follow')==='follow';
         if(!follow&&Math.abs(base.n.dot(tangent[0]))<1e-3)throw new Error('保持截面方向时，路径起始方向不能沿截面平面延伸。请选择“自动对齐路径方向”，或调整路径方向。');
-        const frames=[follow?new THREE.Quaternion().setFromUnitVectors(base.n.clone().multiplyScalar(base.n.dot(tangent[0])<0?-1:1),tangent[0]):new THREE.Quaternion()];for(let i=1;i<points.length;i++)frames.push(new THREE.Quaternion().setFromUnitVectors(tangent[i-1],tangent[i]).multiply(frames[i-1]));
-        if(closed){const finish=new THREE.Quaternion().setFromUnitVectors(tangent.at(-1),tangent[0]).multiply(frames.at(-1)),initial=base.u.clone().applyQuaternion(frames[0]),u=base.u.clone().applyQuaternion(finish);initial.addScaledVector(tangent[0],-initial.dot(tangent[0])).normalize();u.addScaledVector(tangent[0],-u.dot(tangent[0])).normalize();const twist=Math.atan2(tangent[0].dot(u.clone().cross(initial)),u.dot(initial));for(let i=1;i<frames.length;i++)frames[i].premultiply(new THREE.Quaternion().setFromAxisAngle(tangent[i],twist*i/frames.length));}
+        const frames=[follow?new CAD.Quaternion().setFromUnitVectors(base.n.clone().multiplyScalar(base.n.dot(tangent[0])<0?-1:1),tangent[0]):new CAD.Quaternion()];for(let i=1;i<points.length;i++)frames.push(new CAD.Quaternion().setFromUnitVectors(tangent[i-1],tangent[i]).multiply(frames[i-1]));
+        if(closed){const finish=new CAD.Quaternion().setFromUnitVectors(tangent.at(-1),tangent[0]).multiply(frames.at(-1)),initial=base.u.clone().applyQuaternion(frames[0]),u=base.u.clone().applyQuaternion(finish);initial.addScaledVector(tangent[0],-initial.dot(tangent[0])).normalize();u.addScaledVector(tangent[0],-u.dot(tangent[0])).normalize();const twist=Math.atan2(tangent[0].dot(u.clone().cross(initial)),u.dot(initial));for(let i=1;i<frames.length;i++)frames[i].premultiply(new CAD.Quaternion().setFromAxisAngle(tangent[i],twist*i/frames.length));}
     return {base,points,closed,frames};
 }
 // Shape coordinates are independent of the source sketch position and path position.
 // Center the outer contour once, then reuse the same offsets for mesh and animation.
 function sweepSection(shape,base){
-    const contour=loops(shape),center=new THREE.Box2().setFromPoints(contour[0]).getCenter(new THREE.Vector2());
+    const contour=loops(shape),center=new CAD.Box2().setFromPoints(contour[0]).getCenter(new CAD.Vector2());
     const local=contour.map(loop=>loop.map(p=>p.clone().sub(center)));
     const offsets=local.map(loop=>loop.map(p=>base.u.clone().multiplyScalar(p.x).addScaledVector(base.v,p.y)));
     return {contour,local,offsets};
@@ -138,7 +138,7 @@ export function sweepGuideData(doc,feature,options){
     if(shapes.length!==1)throw new Error('扫描截面请选择一个连通闭合区域。');
     const {base,points,closed,frames}=sweepFrames(doc,feature,options),section=sweepSection(shapes[0],base),contours=section.local.map(loop=>loop.map(p=>[p.x,p.y])),lengths=[0];
     const count=closed?points.length:points.length-1;for(let i=0;i<count;i++)lengths.push(lengths.at(-1)+points[i].distanceTo(points[(i+1)%points.length]));
-    return {contours,at(progress){const distance=THREE.MathUtils.clamp(progress,0,1)*lengths.at(-1);let i=0;while(i<count-1&&lengths[i+1]<distance)i++;const t=(distance-lengths[i])/(lengths[i+1]-lengths[i]||1),next=(i+1)%points.length,q=frames[i].clone().slerp(frames[next],t),u=base.u.clone().applyQuaternion(q),v=base.v.clone().applyQuaternion(q);return {o:points[i].clone().lerp(points[next],t),u,v,n:u.clone().cross(v).normalize()};}};
+    return {contours,at(progress){const distance=CAD.MathUtils.clamp(progress,0,1)*lengths.at(-1);let i=0;while(i<count-1&&lengths[i+1]<distance)i++;const t=(distance-lengths[i])/(lengths[i+1]-lengths[i]||1),next=(i+1)%points.length,q=frames[i].clone().slerp(frames[next],t),u=base.u.clone().applyQuaternion(q),v=base.v.clone().applyQuaternion(q);return {o:points[i].clone().lerp(points[next],t),u,v,n:u.clone().cross(v).normalize()};}};
 }
 export function advancedFaces(doc,feature,{shapes,resolve,world,axisLine=null,faceSections=[]}){
     const sketch=doc.sketches.find(s=>s.id===feature.sketchId),base=resolve(doc,sketch.plane),sourceShapes=feature.mode==='sweep'&&feature.thinWall?[thinSweepShape(sketch,feature)]:shapes(sketch,feature);
@@ -151,17 +151,17 @@ export function advancedFaces(doc,feature,{shapes,resolve,world,axisLine=null,fa
         const origin=axisLine?axisLine.a.clone():axisEntity?world(base,axisEntity.x,axisEntity.y):feature.axis==='X'?world(base,0,feature.axisOffset??0):world(base,feature.axisOffset??0,0);
         const angle=(feature.angle??360)*Math.PI/180*(feature.reversed?-1:1),closed=Math.abs(feature.angle-360)<EPS,result=[];
         for(const shape of sourceShapes){
-            const contour=loops(shape),bounds=new THREE.Box2().setFromPoints(contour[0]),center=bounds.getCenter(new THREE.Vector2()),pivot=world(base,center.x,center.y);
+            const contour=loops(shape),bounds=new CAD.Box2().setFromPoints(contour[0]),center=bounds.getCenter(new CAD.Vector2()),pivot=world(base,center.x,center.y);
             // A remote or tilted axis defines the working meridian plane. Move
             // the section by a rigid rotation only: never project/scale its width.
             const radial=pivot.clone().sub(origin).addScaledVector(axis,-pivot.clone().sub(origin).dot(axis));
             let normal=axis.clone().cross(radial);
             if(normal.lengthSq()<EPS*EPS){normal=base.n.clone().addScaledVector(axis,-base.n.dot(axis));if(normal.lengthSq()<EPS*EPS)normal=base.u.clone().addScaledVector(axis,-base.u.dot(axis));}
             normal.normalize();if(normal.dot(base.n)<0)normal.negate();
-            const alignment=new THREE.Quaternion().setFromUnitVectors(base.n,normal);
+            const alignment=new CAD.Quaternion().setFromUnitVectors(base.n,normal);
             const initial=contour.map(loop=>loop.map(p=>world(base,p.x,p.y).sub(pivot).applyQuaternion(alignment).add(pivot)));
-            const radius=Math.max(EPS,...initial.flat().map(p=>{const delta=p.clone().sub(origin);return delta.addScaledVector(axis,-delta.dot(axis)).length();})),size=bounds.getSize(new THREE.Vector2()),tolerance=Math.max(.005,Math.min(.05,Math.min(size.x,size.y)*.003));
-            const stepAngle=Math.min(Math.PI/60,2*Math.acos(THREE.MathUtils.clamp(1-tolerance/radius,-1,1))),steps=Math.max(2,Math.min(360,Math.ceil(Math.abs(angle)/Math.max(stepAngle,1e-4))));
+            const radius=Math.max(EPS,...initial.flat().map(p=>{const delta=p.clone().sub(origin);return delta.addScaledVector(axis,-delta.dot(axis)).length();})),size=bounds.getSize(new CAD.Vector2()),tolerance=Math.max(.005,Math.min(.05,Math.min(size.x,size.y)*.003));
+            const stepAngle=Math.min(Math.PI/60,2*Math.acos(CAD.MathUtils.clamp(1-tolerance/radius,-1,1))),steps=Math.max(2,Math.min(360,Math.ceil(Math.abs(angle)/Math.max(stepAngle,1e-4))));
             const rings=Array.from({length:steps+(closed?0:1)},(_,i)=>initial.map(loop=>loop.map(p=>rotate(p,origin,axis,angle*i/steps))));
             result.push(...skin(rings,[contour,contour],{closed,planarSides:(_,loop,i)=>{const j=(i+1)%contour[loop].length;return Math.abs(initial[loop][j].clone().sub(initial[loop][i]).dot(axis))<EPS&&straightBoundary(sketch,contour[loop][i],contour[loop][j]);}}));
         }return result;
@@ -187,7 +187,7 @@ export function advancedFaces(doc,feature,{shapes,resolve,world,axisLine=null,fa
                 const previous=rings[i-1][loop],current=rings[i][loop];let best=Infinity,offset=0,flip=false;
                 // Correspondence may rotate a closed loop, but must not mirror
                 // one parallel section independently and twist its side walls.
-                const ringNormal=points=>{const normal=new THREE.Vector3(),origin=points[0];for(let j=1;j<points.length-1;j++)normal.add(points[j].clone().sub(origin).cross(points[j+1].clone().sub(origin)));return normal.normalize();};
+                const ringNormal=points=>{const normal=new CAD.Vector3(),origin=points[0];for(let j=1;j<points.length-1;j++)normal.add(points[j].clone().sub(origin).cross(points[j+1].clone().sub(origin)));return normal.normalize();};
                 const alignment=ringNormal(previous).dot(ringNormal(current));
                 const orientations=Math.abs(alignment)<1e-6?[false,true]:[alignment<0];
                 for(const reversed of orientations)for(let shift=0;shift<current.length;shift++){let cost=0;for(let j=0;j<current.length;j++)cost+=previous[j].distanceToSquared(current[(shift+(reversed?-j:j)+current.length)%current.length]);if(cost<best){best=cost;offset=shift;flip=reversed;}}
@@ -211,7 +211,7 @@ const straightEdgeCache=new WeakMap();
 export function solidEdgeOptions(solid,convexOnly=true,reference=null){
     let cached=straightEdgeCache.get(solid);if(!reference&&cached?.has(convexOnly))return cached.get(convexOnly);
     const groups=new Map();for(const polygon of solid){if(polygon.tag.face==='curved'||reference&&!matchesFace(polygon.tag,reference.faceA)&&!matchesFace(polygon.tag,reference.faceB))continue;const key=faceKey(polygon.tag);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(polygon);}
-    const faces=[...groups.values()],result=[],boxes=faces.map(polygons=>{const box=new THREE.Box3();for(const polygon of polygons)for(const vertex of polygon.vertices)box.expandByPoint(vertex);return box.expandByScalar(EPS*2);});
+    const faces=[...groups.values()],result=[],boxes=faces.map(polygons=>{const box=new CAD.Box3();for(const polygon of polygons)for(const vertex of polygon.vertices)box.expandByPoint(vertex);return box.expandByScalar(EPS*2);});
     for(let i=0;i<faces.length;i++)for(let j=i+1;j<faces.length;j++){
         if(reference&&!matchesEdgeFaces(faces[i][0].tag,faces[j][0].tag,reference))continue;
         if(!boxes[i].intersectsBox(boxes[j]))continue;
@@ -232,7 +232,7 @@ function curvedBoundaryOptions(solid,reference=null){
     const onFace=(point,polygon)=>Math.abs(point.dot(polygon.normal)-polygon.w)<EPS*4&&polygon.vertices.every((a,i)=>{const direction=polygon.vertices[(i+1)%polygon.vertices.length].clone().sub(a);return direction.clone().cross(point.clone().sub(a)).dot(polygon.normal)>=-EPS*4*direction.length();});
     const options=[];
     for(const faces of planes.values()){
-        const normalA=faces[0].normal,u=(Math.abs(normalA.z)<.8?new THREE.Vector3(0,0,1):new THREE.Vector3(0,1,0)).cross(normalA).normalize(),v=normalA.clone().cross(u),origin=faces[0].vertices[0],frame={o:origin,u,v,n:normalA},groups=new Map();
+        const normalA=faces[0].normal,u=(Math.abs(normalA.z)<.8?new CAD.Vector3(0,0,1):new CAD.Vector3(0,1,0)).cross(normalA).normalize(),v=normalA.clone().cross(u),origin=faces[0].vertices[0],frame={o:origin,u,v,n:normalA},groups=new Map();
         const world=p=>origin.clone().addScaledVector(u,p.x).addScaledVector(v,p.y);
         for(const segment of faceBoundarySegments(faces,frame)){
             const a=world(segment.a),b=world(segment.b),mid=a.clone().add(b).multiplyScalar(.5),side=[...sides.values()].find(side=>Math.abs(side.normal.dot(normalA))<.999&&side.faces.some(p=>onFace(mid,p)));
@@ -249,12 +249,12 @@ function curvedBoundaryOptions(solid,reference=null){
                 while(graph.get(seed).some(index=>!used.has(index))){let current=seed,previous=null;const points=[vertices.get(seed)],normals=[],limits=[];
                     while(true){const index=graph.get(current).find(index=>!used.has(index));if(index===undefined)break;const segment=segments[index];if(previous&&previous.dot(segment.normalB)<.9)break;used.add(index);const next=key(segment.a)===current?key(segment.b):key(segment.a);points.push(vertices.get(next));normals.push(segment.normalB);limits.push(segment.limit);current=next;previous=segment.normalB;if(current===seed||graph.get(current).length!==2)break;}
                     if(points.length<2)break;const closed=key(points[0])===key(points.at(-1));if(closed)points.pop();if(points.length<(closed?3:2)||points[0].distanceToSquared(points[1])<EPS*EPS)continue;
-                    const frames=points.map((point,index)=>{const n=new THREE.Vector3();if(index>0)n.add(normals[index-1]);else if(closed)n.add(normals.at(-1));if(index<normals.length)n.add(normals[index]);return {point,normalA,normalB:n.normalize()};});
+                    const frames=points.map((point,index)=>{const n=new CAD.Vector3();if(index>0)n.add(normals[index-1]);else if(closed)n.add(normals.at(-1));if(index<normals.length)n.add(normals[index]);return {point,normalA,normalB:n.normalize()};});
                     let curvature=Infinity;for(let i=closed?0:1;i<(closed?points.length:points.length-1);i++){const a=points[(i+points.length-1)%points.length],b=points[i],c=points[(i+1)%points.length],ab=b.clone().sub(a),bc=c.clone().sub(b),cross=ab.clone().cross(bc).length();if(cross>EPS)curvature=Math.min(curvature,ab.length()*bc.length()*a.distanceTo(c)/(2*cross));}
                     chains.push({kind:'curve',closed,points,frames,a:points[0],b:points[1],normalA,normalB:frames[0].normalB,limit:Math.min(...limits,curvature*.9),faceA:{featureId:faces[0].tag.featureId,face:faces[0].tag.face},faceB:{featureId:segments[0].tag.featureId,face:'curved'}});
                 }
             }
-            chains.sort((a,b)=>{const center=edge=>new THREE.Box3().setFromPoints(edge.points).getCenter(new THREE.Vector3());const x=center(a),y=center(b);return x.x-y.x||x.y-y.y||x.z-y.z;});chains.forEach((edge,segment)=>options.push({...edge,segment}));
+            chains.sort((a,b)=>{const center=edge=>new CAD.Box3().setFromPoints(edge.points).getCenter(new CAD.Vector3());const x=center(a),y=center(b);return x.x-y.x||x.y-y.y||x.z-y.z;});chains.forEach((edge,segment)=>options.push({...edge,segment}));
         }
     }
     return options;
@@ -277,7 +277,7 @@ export function resolveChamferEdge(solid,reference){const edge=referencedEdgeOpt
 function treatmentSection(feature,edge,n1,n2,arcSteps=null){
     const distance=feature.depth,tangent=n1.clone().cross(n2).normalize();
     const inward1=tangent.clone().cross(n1).normalize(),inward2=tangent.clone().cross(n2).normalize();if(inward1.dot(n2)>0)inward1.negate();if(inward2.dot(n1)>0)inward2.negate();
-    const fillet=feature.edgeTreatment==='fillet',theta=Math.acos(THREE.MathUtils.clamp(inward1.dot(inward2),-1,1)),d1=fillet?distance/Math.tan(theta/2):distance*(edge.topologyProfile?.first??1),d2=fillet?d1:distance*(edge.topologyProfile?.second??Math.tan((feature.chamferAngle??45)*Math.PI/180));
+    const fillet=feature.edgeTreatment==='fillet',theta=Math.acos(CAD.MathUtils.clamp(inward1.dot(inward2),-1,1)),d1=fillet?distance/Math.tan(theta/2):distance*(edge.topologyProfile?.first??1),d2=fillet?d1:distance*(edge.topologyProfile?.second??Math.tan((feature.chamferAngle??45)*Math.PI/180));
     if(!Number.isFinite(d1)||!Number.isFinite(d2))throw new Error('请输入有效的边缘尺寸。');
     const epsilon=feature.topologyBevel ? .002 : Math.max(.002,distance*.0002),outside=n1.clone().add(n2).multiplyScalar(feature.topologyBevel?epsilon/(1+n1.dot(n2)):epsilon),p1=inward1.clone().multiplyScalar(d1),p2=inward2.clone().multiplyScalar(d2),offsets=[outside,p1.clone().addScaledVector(n1,epsilon),p1];
     const u=inward1,v=inward2.clone().addScaledVector(u,-inward2.dot(u)).normalize();
@@ -285,7 +285,7 @@ function treatmentSection(feature,edge,n1,n2,arcSteps=null){
         const steps=arcSteps??feature.exportSegments??(feature.previewSegments===8?8:null)??Math.max(8,Math.min(48,Math.ceil(Math.abs(sweep)/(Math.PI/48)-1e-8)));for(let i=1;i<=steps;i++){const angle=from+sweep*i/steps;offsets.push(i===steps?p2.clone():center.clone().addScaledVector(u,distance*Math.cos(angle)).addScaledVector(v,distance*Math.sin(angle)));}
     }else offsets.push(p2);
     const arcStart=2,arcEnd=offsets.length-1;offsets.push(p2.clone().addScaledVector(n2,epsilon));
-    return {arcStart,arcEnd,center:fillet?inward1.clone().add(inward2).normalize().multiplyScalar(distance/Math.sin(theta/2)):null,offsets,local:[offsets.map(offset=>new THREE.Vector2(offset.dot(u),offset.dot(v)))],fillet};
+    return {arcStart,arcEnd,center:fillet?inward1.clone().add(inward2).normalize().multiplyScalar(distance/Math.sin(theta/2)):null,offsets,local:[offsets.map(offset=>new CAD.Vector2(offset.dot(u),offset.dot(v)))],fillet};
 }
 
 function treatmentFaceNames(faces,section){

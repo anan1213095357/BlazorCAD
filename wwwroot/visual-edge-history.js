@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {buildSolid,documentGeometry} from './geometry.js';
 import {referencedEdgeOptions,resolveChamferEdge} from './advanced-features.js';
 
@@ -40,7 +40,7 @@ export function prepareVisualEdgeHistory(document,solid){
     return [...result];
 }
 export function importVisualEdgeHistory(records){
-    preparedSources=new Map(records.map(([key,edge])=>[key,edge.error?edge:{...edge,a:new THREE.Vector3(...edge.a),b:new THREE.Vector3(...edge.b),points:edge.points?.map(point=>new THREE.Vector3(...point))}]));
+    preparedSources=new Map(records.map(([key,edge])=>[key,edge.error?edge:{...edge,a:new CAD.Vector3(...edge.a),b:new CAD.Vector3(...edge.b),points:edge.points?.map(point=>new CAD.Vector3(...point))}]));
 }
 export function visualEdgeDescendants(document,feature,reference,solid){
     const candidates=referencedEdgeOptions(solid,reference).filter(edge=>matching(edge,reference));if(!candidates.length)return [];
@@ -56,8 +56,8 @@ export function visualEdgeDescendants(document,feature,reference,solid){
         }
         return result;
     }
-    const points=source.points,closest=new THREE.Vector3(),rail=[];
-    for(let i=0;i<(source.closed?points.length:points.length-1);i++)rail.push(new THREE.Line3(points[i],points[(i+1)%points.length]));
+    const points=source.points,closest=new CAD.Vector3(),rail=[];
+    for(let i=0;i<(source.closed?points.length:points.length-1);i++)rail.push(new CAD.Line3(points[i],points[(i+1)%points.length]));
     return candidates.filter(edge=>edge.points.every(point=>rail.some(segment=>{segment.closestPointToPoint(point,true,closest);return closest.distanceToSquared(point)<=tolerance*tolerance;})));
 }
 export function clearVisualEdgeHistory(){sources.clear();preparedSources.clear();}

@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 // Preserve the requested size. Geometric validity is checked on the result;
 // neither neighbour width nor edge length silently changes the user's value.
 export function topologyBevelWidth(feature,edges){
@@ -93,12 +93,12 @@ function retessellateFaces(polygons,Polygon){
             loops.push(ring);
         }
         if(!valid){for(const face of faces)result.push(face);continue;}
-        const n=source.normal,u=(Math.abs(n.z)<.8?new THREE.Vector3(0,0,1):new THREE.Vector3(0,1,0)).cross(n).normalize(),v=n.clone().cross(u),project=ring=>ring.map(p=>new THREE.Vector2(p.dot(u),p.dot(v))),data=loops.map(ring=>({ring,points:project(ring)}));
+        const n=source.normal,u=(Math.abs(n.z)<.8?new CAD.Vector3(0,0,1):new CAD.Vector3(0,1,0)).cross(n).normalize(),v=n.clone().cross(u),project=ring=>ring.map(p=>new CAD.Vector2(p.dot(u),p.dot(v))),data=loops.map(ring=>({ring,points:project(ring)}));
         const inside=(p,ring)=>{let value=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a.y>p.y)!==(b.y>p.y)&&p.x<(b.x-a.x)*(p.y-a.y)/(b.y-a.y)+a.x)value=!value;}return value;};
-        const outers=data.filter(loop=>THREE.ShapeUtils.area(loop.points)>0),holes=data.filter(loop=>THREE.ShapeUtils.area(loop.points)<0);
+        const outers=data.filter(loop=>CAD.ShapeUtils.area(loop.points)>0),holes=data.filter(loop=>CAD.ShapeUtils.area(loop.points)<0);
         if(!outers.length){for(const face of faces)result.push(face);continue;}
         for(const outer of outers){const contained=holes.filter(hole=>inside(hole.points[0],outer.points)),points=[outer.ring,...contained.map(hole=>hole.ring)].flat();
-            for(const triangle of THREE.ShapeUtils.triangulateShape(outer.points,contained.map(hole=>hole.points))){const p=new Polygon(triangle.map(i=>points[i]),source.tag,1e-8);if(p.normal.dot(n)<0)p.flip();if(p.normal.lengthSq()>.5)result.push(p);}
+            for(const triangle of CAD.ShapeUtils.triangulateShape(outer.points,contained.map(hole=>hole.points))){const p=new Polygon(triangle.map(i=>points[i]),source.tag,1e-8);if(p.normal.dot(n)<0)p.flip();if(p.normal.lengthSq()>.5)result.push(p);}
         }
     }
     return result;

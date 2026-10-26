@@ -1,7 +1,7 @@
 // Compile an exact affine motion for a fixed straight-edge BSP topology.
 // Every supporting plane has a fixed normal and an affine offset in radius.
 // Vertex velocities follow the intersection of three independent planes.
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {buildSolid} from './geometry.js';
 import {resolveChamferEdge,chamferFaces} from './advanced-features.js';
 import {topologyBevelWidth} from './topology-bevel.js';
@@ -29,7 +29,7 @@ export function compileFilletMotion(document,feature,polygons,ordered){
         }
     }
     const widthLimit=bevel?topologyBevelWidth(feature,edges).maximum:Infinity;
-    let min=.1,max=bevel?widthLimit:Math.min(1000,...edges.map(edge=>edge.limit*Math.tan((Math.PI-Math.acos(THREE.MathUtils.clamp(edge.normalA.dot(edge.normalB),-1,1)))/2)*.98));const velocities=new Map(),unresolved=new Map();
+    let min=.1,max=bevel?widthLimit:Math.min(1000,...edges.map(edge=>edge.limit*Math.tan((Math.PI-Math.acos(CAD.MathUtils.clamp(edge.normalA.dot(edge.normalB),-1,1)))/2)*.98));const velocities=new Map(),unresolved=new Map();
     const constrain=(point,velocity)=>{
         for(const plane of planes){const distance=plane.n.dot(point)-plane.w,slope=plane.n.dot(velocity)-plane.slope;if(Math.abs(distance)<2e-5||Math.abs(slope)<1e-8)continue;const crossing=radius-distance/slope;if(crossing>radius)max=Math.min(max,crossing);else min=Math.max(min,crossing);}
     };
@@ -73,7 +73,7 @@ export function compileFilletMotion(document,feature,polygons,ordered){
     if(min>.1)min+=1e-4;if(max<widthLimit||!bevel)max-=1e-4;if(radius<min||radius>max||max-min<.05)return null;
     const centerSpeeds=new Map();for(const edge of edges){const curved=chamferFaces([],feature,edge).find(face=>face.smooth?.kind==='cylinder');if(curved)centerSpeeds.set(key(curved.smooth.center),curved.smooth.center.clone().sub(edge.a).divideScalar(radius));}
     const movement=[],uvMovement=[],normalMotion=[];
-    for(const p of ordered){const u=(Math.abs(p.normal.z)<.8?new THREE.Vector3(0,0,1):new THREE.Vector3(0,1,0)).cross(p.normal).normalize(),v=p.normal.clone().cross(u);
+    for(const p of ordered){const u=(Math.abs(p.normal.z)<.8?new CAD.Vector3(0,0,1):new CAD.Vector3(0,1,0)).cross(p.normal).normalize(),v=p.normal.clone().cross(u);
         for(let i=1;i<p.vertices.length-1;i++){const triangle=[p.vertices[0],p.vertices[i],p.vertices[i+1]];if(triangle[1].clone().sub(triangle[0]).cross(triangle[2].clone().sub(triangle[0])).lengthSq()<1e-12)continue;for(const point of triangle){const speed=velocities.get(key(point));movement.push(speed.x,speed.y,speed.z);uvMovement.push(speed.dot(u),speed.dot(v));const surface=p.tag.featureId===feature.id?p.tag.smooth:null,centerSpeed=surface?.kind==='cylinder'?centerSpeeds.get(key(surface.center)):null;if(centerSpeed)normalMotion.push(...surface.center.toArray(),...surface.axis.toArray(),...centerSpeed.toArray());else normalMotion.push(NaN,0,0,0,0,0,0,0,0);}}
     }
     return {radius,min,max,movement:new Float32Array(movement),uvMovement:new Float32Array(uvMovement),normalMotion:new Float32Array(normalMotion),centers:polygons.map(p=>p.tag.featureId===feature.id&&p.tag.smooth?.kind==='cylinder'?centerSpeeds.get(key(p.tag.smooth.center))?.toArray()??null:null),vertices:polygons.map(p=>p.vertices.map(point=>velocities.get(key(point)).toArray()))};

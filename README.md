@@ -2,7 +2,7 @@
 
 .NET 10 Blazor Web App，采用 Interactive Server（Blazor Server）。项目启动为空白。
 
-原生 WebGPU 迁移分支的入口已接入自写渲染器；CPU 几何和拾取仍使用 Three.js core，尚未完成全部替换。具体范围与未验证项见 [WEBGPU_MIGRATION.md](WEBGPU_MIGRATION.md)。
+当前分支采用自写 CAD 数学、场景、几何构造、拾取与相机控制模块，以及原生 WebGPU 渲染器；已移除 Three.js 依赖。源码替换尚未运行验证，具体范围与未验证项见 [WEBGPU_MIGRATION.md](WEBGPU_MIGRATION.md)。
 
 ## 建模流程
 

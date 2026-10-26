@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {buildSolid,featurePolygons,importSolidState,unpackExportEdges,exportEdgeTools,exportOperationTools} from './geometry.js';
 import {exportMeshOperations} from './export-mesh-kernel.js';
 import {visualEdgeDescendants} from './visual-edge-history.js';
@@ -9,7 +9,7 @@ function progress(message){exportStage=message;self.postMessage({progress:messag
 async function bakeFinalStock(document,stock,edges){
     const grouped=new Map();for(const edge of edges){const id=edge.visualFeature?.id;if(!grouped.has(id))grouped.set(id,[]);grouped.get(id).push(edge);}
     const additions=new Map(),tools=[];
-    const box=polygons=>new THREE.Box3().setFromPoints(polygons.flatMap(p=>p.vertices)).expandByScalar(1e-5);
+    const box=polygons=>new CAD.Box3().setFromPoints(polygons.flatMap(p=>p.vertices)).expandByScalar(1e-5);
     for(const [index,feature] of document.features.entries()){
         if(feature.mode!=='chamfer'||!feature.visualOnly)continue;
         const resolved=grouped.get(feature.id)??[],references=feature.chamferEdges?.length?feature.chamferEdges:[feature.chamferEdge];
@@ -66,7 +66,7 @@ async function materialize(document,seed,packedEdges){
 export function binaryStl(polygons){
     progress('正在检查三角边并写入 STL…');
     const triangles=[],incidence=new Map(),key=point=>point.toArray().map(value=>value===0?0:value).join('/'),splits=new Map();
-    const floatPoint=point=>new THREE.Vector3(Math.fround(point.x),Math.fround(point.y),Math.fround(point.z));
+    const floatPoint=point=>new CAD.Vector3(Math.fround(point.x),Math.fround(point.y),Math.fround(point.z));
     const edgeKey=(a,b)=>{const x=key(a),y=key(b);return x<y?x+'>'+y:y+'>'+x;};
     // Float32 conversion can flatten a very thin triangle into three collinear
     // points. Its middle vertex still belongs to the neighbouring boundary.

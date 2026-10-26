@@ -1,5 +1,5 @@
 import Module from './vendor/manifold.js';
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {closeExportSolid} from './geometry.js';
 let loaded;
 async function kernel(){
@@ -12,7 +12,7 @@ function inputMesh(module,polygons,label){
     const triangle=(a,b,c)=>{const ids=[vertex(a),vertex(b),vertex(c)];if(new Set(ids).size===3)triangles.push(...ids);};
     for(const polygon of sewn){
         if(polygon.vertices.length===3)triangle(...polygon.vertices);
-        else{const center=polygon.vertices.reduce((sum,point)=>sum.add(point),new THREE.Vector3()).multiplyScalar(1/polygon.vertices.length);for(let i=0;i<polygon.vertices.length;i++)triangle(center,polygon.vertices[i],polygon.vertices[(i+1)%polygon.vertices.length]);}
+        else{const center=polygon.vertices.reduce((sum,point)=>sum.add(point),new CAD.Vector3()).multiplyScalar(1/polygon.vertices.length);for(let i=0;i<polygon.vertices.length;i++)triangle(center,polygon.vertices[i],polygon.vertices[(i+1)%polygon.vertices.length]);}
     }
     const mesh=new module.Mesh({numProp:3,vertProperties:new Float32Array(positions),triVerts:new Uint32Array(triangles)});mesh.merge();
     const result=new module.Manifold(mesh),status=result.status();
@@ -37,7 +37,7 @@ export async function exportMeshOperations(stock,operations,onProgress=()=>{}){
         }
         const status=result.status();if(status!=='NoError')throw new Error(`网格布尔失败（${status}）。`);
         const mesh=result.getMesh(),vertices=[];
-        for(let i=0;i<mesh.vertProperties.length;i+=mesh.numProp)vertices.push(new THREE.Vector3(mesh.vertProperties[i],mesh.vertProperties[i+1],mesh.vertProperties[i+2]));
+        for(let i=0;i<mesh.vertProperties.length;i+=mesh.numProp)vertices.push(new CAD.Vector3(mesh.vertProperties[i],mesh.vertProperties[i+1],mesh.vertProperties[i+2]));
         const polygons=[];
         for(let i=0;i<mesh.triVerts.length;i+=3)polygons.push({vertices:[vertices[mesh.triVerts[i]],vertices[mesh.triVerts[i+1]],vertices[mesh.triVerts[i+2]]]});
         return polygons;

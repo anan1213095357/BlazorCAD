@@ -1,5 +1,5 @@
-import * as THREE from './vendor/three.core.js';
-const v=()=>new THREE.Vector3();
+import * as CAD from './engine/core.js';
+const v=()=>new CAD.Vector3();
 export function circleOf(edge){
     if(!edge.closed||edge.points.length<6)return null;
     // BSP inserts points along existing chords. Remove those points before
@@ -12,7 +12,7 @@ export function circleOf(edge){
     const radius=points.reduce((sum,p)=>sum+p.distanceTo(center),0)/points.length,tolerance=Math.max(.0001,radius*.0002);
     if(points.some(p=>Math.abs(p.distanceTo(center)-radius)>tolerance))return null;
     const normal=edge.normalA,u=points[0].clone().sub(center).normalize(),basis=normal.clone().cross(u).normalize(),step=2*Math.PI/points.length;
-    if(points.some((point,i)=>{const a=point.clone().sub(center).normalize(),b=points[(i+1)%points.length].clone().sub(center).normalize();return Math.abs(Math.acos(THREE.MathUtils.clamp(a.dot(b),-1,1))-step)>1e-4;}))return null;
+    if(points.some((point,i)=>{const a=point.clone().sub(center).normalize(),b=points[(i+1)%points.length].clone().sub(center).normalize();return Math.abs(Math.acos(CAD.MathUtils.clamp(a.dot(b),-1,1))-step)>1e-4;}))return null;
     const sign=Math.sign(u.dot(edge.frames[0].normalB));if(!sign||Math.abs(normal.dot(edge.frames[0].normalB))>1e-4)return null;
     return {center,radius,sign,u,basis,count:points.length,points,frames:points.map(point=>({point,normalA:normal,normalB:point.clone().sub(center).normalize().multiplyScalar(sign)}))};
 }

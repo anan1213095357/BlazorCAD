@@ -1,10 +1,10 @@
 // Planar arrangement of analytic rectangle edges and circles. Intersections split
 // half-edges; their left-hand cycles define atomic selectable sketch regions.
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import { outline } from './sketch-tools.js';
 const TAU = Math.PI * 2, EPS = 1e-7, STEP = Math.PI / 64;
 const cross = (a,b) => a.x*b.y-a.y*b.x;
-const point = (x,y) => new THREE.Vector2(x,y);
+const point = (x,y) => new CAD.Vector2(x,y);
 const mod = a => ((a % TAU) + TAU) % TAU;
 function primitives(entities) {
     const result=[];
@@ -122,8 +122,8 @@ function computeRegions(sketch) {
     return regions.filter(r=>r.area>EPS);
 }
 export function regionShape(region) {
-    const shape=new THREE.Shape(region.outer.points);
-    for(const hole of region.holes)shape.holes.push(new THREE.Path(hole.points));
+    const shape=new CAD.Shape(region.outer.points);
+    for(const hole of region.holes)shape.holes.push(new CAD.Path(hole.points));
     return shape;
 }
 export function selectRegions(sketch,keys) {

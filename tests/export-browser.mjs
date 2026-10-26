@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 const root=path.resolve('wwwroot'),project=JSON.parse(fs.readFileSync(process.argv[2],'utf8')).document;
 const server=http.createServer((request,response)=>{
- if(request.url==='/'){response.setHeader('Content-Type','text/html');response.end('<!doctype html><script type="importmap">{"imports":{"three":"/vendor/three.core.js"}}</script><div id="cad-test" style="position:fixed;inset:0"></div>');return;}
+ if(request.url==='/'){response.setHeader('Content-Type','text/html');response.end('<!doctype html><div id="cad-test" style="position:fixed;inset:0"></div>');return;}
  const filename=path.resolve(root,'.'+decodeURIComponent(request.url.split('?')[0]));
  if(!filename.startsWith(root+path.sep)||!fs.existsSync(filename)){response.writeHead(404).end();return;}
  response.setHeader('Content-Type',filename.endsWith('.wasm')?'application/wasm':filename.endsWith('.js')?'text/javascript':'application/octet-stream');fs.createReadStream(filename).pipe(response);

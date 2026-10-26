@@ -1,6 +1,6 @@
 // Convex polygon BSP boolean operations. Coordinates remain in model millimetres.
 // Face provenance survives splitting so a resulting planar face can host a sketch.
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {recordBodyHistory,connectedBodies} from './solid-bodies.js';
 import {advancedFaces,chamferFaces,solidEdgeOptions,edgeTreatmentOptions,resolveChamferEdge,resolveSolidEdge,sweepGuideData} from './advanced-features.js';
 export {solidEdgeOptions,edgeTreatmentOptions,resolveSolidEdge};
@@ -18,7 +18,7 @@ class Polygon {
         this.vertexTolerance=vertexTolerance;
         this.vertices = vertices.filter((v, i) => v.distanceToSquared(vertices[(i + vertices.length - 1) % vertices.length]) > vertexTolerance * vertexTolerance);
         this.tag = tag;
-        this.normal = new THREE.Vector3();
+        this.normal = new CAD.Vector3();
         // Splitting can introduce collinear vertices; use the complete polygon normal.
         for (let i = 1; i < this.vertices.length-1; i++) this.normal.add(this.vertices[i].clone().sub(this.vertices[0]).cross(this.vertices[i+1].clone().sub(this.vertices[0])));
         this.normal.normalize();
@@ -116,7 +116,7 @@ export function exportOperationTools(document,feature){
     const operand=featurePolygons(document,feature);
     return feature.mode==='chamfer'?geometryState(document).context.ends.get(feature.id).operands:[operand];
 }
-const vec = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const vec = (x = 0, y = 0, z = 0) => new CAD.Vector3(x, y, z);
 function frame(o, u, v) { return { o, u, v, n: u.clone().cross(v).normalize() }; }
 export function world(f, x, y, z = 0) { return f.o.clone().addScaledVector(f.u, x).addScaledVector(f.v, y).addScaledVector(f.n, z); }
 const states = new WeakMap();
@@ -192,7 +192,7 @@ function resolveEnd(doc, feature, before, context) {
     if (mode === 'throughAll') {
         if (!before.length) throw new Error('贯穿全部需要已有实体，请为首个实体指定距离。');
         let far = -Infinity;
-        const box = new THREE.Box3();
+        const box = new CAD.Box3();
         for (const polygon of before) for (const v of polygon.vertices) { box.expandByPoint(v); far = Math.max(far, v.clone().sub(base.o).dot(direction)); }
         if (far <= EPS) throw new Error('当前方向没有可贯穿的实体，请勾选反向或更换草图面。');
         depth = far + Math.max(1, box.getSize(vec()).length() * .01);
@@ -222,7 +222,7 @@ export function resolvePlane(doc, plane, cache = new Map(), context = null) {
         const source=doc.sketches.find(s=>s.id===plane.sourceSketchId);if(!source)throw new Error('中心路径引用的截面草图已删除。');
         const base=resolvePlane(doc,source.plane,cache,context),shapes=selectedShapes(source,{regionKeys:plane.centerRegionKeys});
         if(shapes.length!==1)throw new Error('中心路径需要一个连通闭合截面。');
-        const center=new THREE.Box2().setFromPoints(shapes[0].getPoints(64)).getCenter(new THREE.Vector2());
+        const center=new CAD.Box2().setFromPoints(shapes[0].getPoints(64)).getCenter(new CAD.Vector2());
         cache.delete(key);return frame(world(base,center.x,center.y),base.u.clone(),base.n.clone());
     }
     if (!plane?.featureId) {
@@ -248,7 +248,7 @@ export function resolvePlane(doc, plane, cache = new Map(), context = null) {
     if (feature.regionKeys?.length) {
         const regions = selectRegions(sketch, feature.regionKeys);
         const points = regions.flatMap(r => r.outer.points);
-        const center = new THREE.Box2().setFromPoints(points).getCenter(new THREE.Vector2());
+        const center = new CAD.Box2().setFromPoints(points).getCenter(new CAD.Vector2());
         cx = center.x; cy = center.y;
     } else { cx = ['circle','arc','polygon'].includes(e.kind) ? e.x : e.x + e.width / 2; cy = ['circle','arc','polygon'].includes(e.kind) ? e.y : e.y + e.height / 2; }
     let result;
@@ -285,7 +285,7 @@ export function resolvePlane(doc, plane, cache = new Map(), context = null) {
     cache.set(key, result); return result;
 }
 export function profileShape(e) {
-    const s = new THREE.Shape();
+    const s = new CAD.Shape();
     if (e.kind === 'circle') s.absarc(e.x, e.y, e.radius, 0, Math.PI * 2, false);
     else { const points=outline(e);s.moveTo(...points[0]);for(const p of points.slice(1))s.lineTo(...p);s.closePath(); }
     return s;
@@ -309,14 +309,14 @@ export function featurePolygons(doc, feature, context = null) {
         for(const polygon of polygons){if(!polygon.tag.face.startsWith('surface|'))continue;const same=planarGroups.find(p=>p.normal.dot(polygon.normal)>.999999&&Math.abs(p.w-polygon.w)<EPS);if(same)polygon.tag.face=same.tag.face;else planarGroups.push(polygon);}
         end.surfaces=new Map();
         const groups=new Map();for(const polygon of polygons){if(polygon.tag.face==='curved')continue;if(!groups.has(polygon.tag.face))groups.set(polygon.tag.face,[]);groups.get(polygon.tag.face).push(polygon);}
-        for(const [name,faces] of groups){const polygon=faces[0],n=polygon.normal.clone().multiplyScalar(feature.kind==='cut'?-1:1),box=new THREE.Box3();for(const face of faces)for(const point of face.vertices)box.expandByPoint(point);const center=box.getCenter(vec());center.addScaledVector(n,-center.clone().sub(polygon.vertices[0]).dot(n));
+        for(const [name,faces] of groups){const polygon=faces[0],n=polygon.normal.clone().multiplyScalar(feature.kind==='cut'?-1:1),box=new CAD.Box3();for(const face of faces)for(const point of face.vertices)box.expandByPoint(point);const center=box.getCenter(vec());center.addScaledVector(n,-center.clone().sub(polygon.vertices[0]).dot(n));
             let u=end.base.u.clone().addScaledVector(n,-end.base.u.dot(n));if(u.lengthSq()<1e-6)u=end.base.v.clone().addScaledVector(n,-end.base.v.dot(n));u.normalize();end.surfaces.set(name,frame(center,u,n.clone().cross(u)));
         }
         return polygons;
     }
     const f = end.base, sign = end.sign;
     const shapes = selectedShapes(sketch, feature);
-    const geometry = new THREE.ExtrudeGeometry(shapes, { depth: 1, bevelEnabled: false, curveSegments: 64 });
+    const geometry = new CAD.ExtrudeGeometry(shapes, { depth: 1, bevelEnabled: false, curveSegments: 64 });
     const p = geometry.attributes.position, result = [];
     for (let i = 0; i < p.count; i += 3) {
         const local = [0, 1, 2].map(j => vec().fromBufferAttribute(p, i + j));
@@ -417,7 +417,7 @@ export function buildSolid(doc) {
                     const target=selected.some(edge=>body.box.clone().expandByScalar(1e-6).containsPoint(edge.a.clone().add(edge.b).multiplyScalar(.5))&&body.polygons.some(p=>[edge.faceA,edge.faceB].some(ref=>p.tag.featureId===ref.featureId&&p.tag.face===ref.face)));
                     if(!target)return body.polygons;
                     let part=body.polygons.map(p=>new Polygon(p.vertices,p.tag,1e-8));
-                    for(const tool of tools){const box=new THREE.Box3().setFromPoints(tool.flatMap(p=>p.vertices));if(body.box.intersectsBox(box))part=boolean(part,tool.map(p=>new Polygon(p.vertices,p.tag,1e-8)),true,1e-8);}
+                    for(const tool of tools){const box=new CAD.Box3().setFromPoints(tool.flatMap(p=>p.vertices));if(body.box.intersectsBox(box))part=boolean(part,tool.map(p=>new Polygon(p.vertices,p.tag,1e-8)),true,1e-8);}
                     return sewTopologyBevel(sewBoundary(part),Polygon);
                 });
             }else for(const tool of tools)clipped=boolean(clipped,tool,true);
@@ -426,7 +426,7 @@ export function buildSolid(doc) {
             // A distant body cannot participate in this operation. Keeping it
             // out of the BSP also avoids subdividing all of its faces by the
             // new tool's infinite supporting planes.
-            const bounds=new THREE.Box3();for(const polygon of operand)for(const point of polygon.vertices)bounds.expandByPoint(point);bounds.expandByScalar(EPS);
+            const bounds=new CAD.Box3();for(const polygon of operand)for(const point of polygon.vertices)bounds.expandByPoint(point);bounds.expandByScalar(EPS);
             const affected=[],unchanged=[];
             for(const body of connectedBodies(solid)){
                 const target=body.box.intersectsBox(bounds)?affected:unchanged;
@@ -458,13 +458,13 @@ const smoothSurfaceCache=new WeakMap();
 function smoothSurfaceNormals(polygons){
     if(smoothSurfaceCache.has(polygons))return smoothSurfaceCache.get(polygons);
     const vertices=new Map(),key=(p,v)=>p.tag.featureId+'/'+[v.x,v.y,v.z].map(n=>Math.round(n/1e-5)).join('/');
-    for(const p of polygons){if(p.tag.face!=='curved'||p.tag.smooth)continue;const area=new THREE.Vector3();for(let i=1;i<p.vertices.length-1;i++)area.add(p.vertices[i].clone().sub(p.vertices[0]).cross(p.vertices[i+1].clone().sub(p.vertices[0])));const entry={normal:p.normal,weight:Math.max(1e-8,area.length())};
+    for(const p of polygons){if(p.tag.face!=='curved'||p.tag.smooth)continue;const area=new CAD.Vector3();for(let i=1;i<p.vertices.length-1;i++)area.add(p.vertices[i].clone().sub(p.vertices[0]).cross(p.vertices[i+1].clone().sub(p.vertices[0])));const entry={normal:p.normal,weight:Math.max(1e-8,area.length())};
         for(const v of p.vertices){const id=key(p,v);if(!vertices.has(id))vertices.set(id,[]);vertices.get(id).push(entry);}}
     const result=(p,v)=>{if(p.tag.face!=='curved')return p.normal;
         const surface=p.tag.smooth;
-        if(surface?.kind==='patch'){const weights=new THREE.Vector3();THREE.Triangle.getBarycoord(v,...surface.points,weights);const normal=new THREE.Vector3();surface.normals.forEach((n,i)=>normal.addScaledVector(n,weights.getComponent(i)));if(normal.lengthSq()>1e-12){normal.normalize();if(normal.dot(p.normal)<0)normal.negate();return normal;}}
+        if(surface?.kind==='patch'){const weights=new CAD.Vector3();CAD.Triangle.getBarycoord(v,...surface.points,weights);const normal=new CAD.Vector3();surface.normals.forEach((n,i)=>normal.addScaledVector(n,weights.getComponent(i)));if(normal.lengthSq()>1e-12){normal.normalize();if(normal.dot(p.normal)<0)normal.negate();return normal;}}
         else if(surface?.kind==='capsule'){
-            const delta=v.clone().sub(surface.start),rail=surface.end.clone().sub(surface.start),length=rail.lengthSq(),t=length>1e-12?THREE.MathUtils.clamp(delta.dot(rail)/length,0,1):0;
+            const delta=v.clone().sub(surface.start),rail=surface.end.clone().sub(surface.start),length=rail.lengthSq(),t=length>1e-12?CAD.MathUtils.clamp(delta.dot(rail)/length,0,1):0;
             const normal=delta.addScaledVector(rail,-t);normal.addScaledVector(surface.axis,-normal.dot(surface.axis));
             if(normal.lengthSq()>1e-12){normal.normalize();if(normal.dot(p.normal)<0)normal.negate();return normal;}
         }
@@ -473,7 +473,7 @@ function smoothSurfaceNormals(polygons){
             if(planar.lengthSq()>1e-12){const normal=delta.addScaledVector(planar.normalize(),-surface.majorRadius).normalize();if(normal.dot(p.normal)<0)normal.negate();return normal;}
         }
         else if(surface){const radial=v.clone().sub(surface.center);if(surface.kind==='cylinder')radial.addScaledVector(surface.axis,-radial.dot(surface.axis));if(radial.lengthSq()>1e-12){radial.normalize();if(radial.dot(p.normal)<0)radial.negate();return radial;}}
-        const normal=new THREE.Vector3();for(const entry of vertices.get(key(p,v))??[])if(entry.normal.dot(p.normal)>.6)normal.addScaledVector(entry.normal,entry.weight);return normal.lengthSq()>0?normal.normalize():p.normal;};
+        const normal=new CAD.Vector3();for(const entry of vertices.get(key(p,v))??[])if(entry.normal.dot(p.normal)>.6)normal.addScaledVector(entry.normal,entry.weight);return normal.lengthSq()>0?normal.normalize():p.normal;};
     smoothSurfaceCache.set(polygons,result);return result;
 }
 function surfaceUvs(p,triangle,u,vAxis){
@@ -512,10 +512,10 @@ export function solidGeometry(polygons,materialIndices=null) {
         if(materialIndices){const index=materialIndices.get(p)??0,last=groups.at(-1);if(last?.materialIndex===index)last.count+=3;else groups.push({start:positions.length/3-3,count:3,materialIndex:index});}
     }
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('tangent',new THREE.Float32BufferAttribute(tangents,4));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+    const geometry = new CAD.BufferGeometry();
+    geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('tangent',new CAD.Float32BufferAttribute(tangents,4));
+    geometry.setAttribute('normal', new CAD.Float32BufferAttribute(normals, 3));geometry.setAttribute('uv',new CAD.Float32BufferAttribute(uvs,2));
     for(const group of groups)geometry.addGroup(group.start,group.count,group.materialIndex);geometry.computeBoundingSphere(); return { geometry, tags,polygons };
 }
 
@@ -540,8 +540,8 @@ function packState(value){
     return value;
 }
 function unpackState(value){
-    if(value?.$cad==='v3')return new THREE.Vector3(...value.v);
-    if(value?.$cad==='v2')return new THREE.Vector2(...value.v);
+    if(value?.$cad==='v3')return new CAD.Vector3(...value.v);
+    if(value?.$cad==='v2')return new CAD.Vector2(...value.v);
     if(value?.$cad==='map')return new Map(value.v.map(([k,v])=>[k,unpackState(v)]));
     if(Array.isArray(value))return value.map(unpackState);
     if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,unpackState(v)]));

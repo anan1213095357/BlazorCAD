@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "FORMA parametric CAD workspace for .NET 10 Blazor Server",
   "scripts": {
+    "test:engine": "node tests/engine-regression.mjs",
     "test": "node tests/bevel-regression.mjs",
     "test:bevel:browser": "node tests/bevel-browser.mjs",
     "test:export": "node tests/export-browser.mjs"
@@ -12,8 +13,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "manifold-3d": "3.5.4",
-    "three": "^0.180.0"
+    "manifold-3d": "3.5.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1"

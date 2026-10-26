@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 import {buildSolid} from './geometry.js';
 import {topologyBevelWidth} from './topology-bevel.js';
 import {resolveChamferEdge,chamferFaces} from './advanced-features.js';
@@ -16,7 +16,7 @@ export function compileTopologyBevelMotion(document,feature,polygons,ordered){
     const edges=bevelControlCage(refs.map(ref=>resolveChamferEdge(before,ref)),feature),ends=topologyBevelEndPlanes(before,feature,edges),current=edges.map(edge=>chamferFaces([],feature,edge)),shifted=edges.map(edge=>chamferFaces([],{...feature,depth:radius+step},edge));
     for(let edgeIndex=0;edgeIndex<edges.length;edgeIndex++){const a=current[edgeIndex],b=shifted[edgeIndex];
         if(a.length!==b.length)return null;
-        const plane=face=>{const n=new THREE.Vector3();for(let i=1;i<face.vertices.length-1;i++)n.add(face.vertices[i].clone().sub(face.vertices[0]).cross(face.vertices[i+1].clone().sub(face.vertices[0])));n.normalize();return {n,w:n.dot(face.vertices[0])};};
+        const plane=face=>{const n=new CAD.Vector3();for(let i=1;i<face.vertices.length-1;i++)n.add(face.vertices[i].clone().sub(face.vertices[0]).cross(face.vertices[i+1].clone().sub(face.vertices[0])));n.normalize();return {n,w:n.dot(face.vertices[0])};};
         for(let i=0;i<a.length;i++){const p=plane(a[i]),q=plane(b[i]);if(p.n.dot(q.n)<1-1e-10)return null;tools.push({...p,slope:(q.w-p.w)/step});}
     }
     // Clipping adds stationary end planes. Do not finite-difference the clipped
@@ -28,7 +28,7 @@ export function compileTopologyBevelMotion(document,feature,polygons,ordered){
     const key=p=>p.toArray().map(v=>Math.round(v/1e-6)).join('/'),speeds=new Map(),incidents=new Map();
     polygons.forEach((p,i)=>p.vertices.forEach(point=>{const id=key(point);if(!incidents.has(id))incidents.set(id,[]);incidents.get(id).push(planes[i]);}));
     for(const [id,incident] of incidents){
-        if(incident.every(p=>Math.abs(p.slope)<1e-10)){speeds.set(id,new THREE.Vector3());continue;}
+        if(incident.every(p=>Math.abs(p.slope)<1e-10)){speeds.set(id,new CAD.Vector3());continue;}
         let speed=null;
         for(let i=0;i<incident.length&&!speed;i++)for(let j=i+1;j<incident.length&&!speed;j++)for(let k=j+1;k<incident.length;k++){
             const [a,b,c]=[incident[i],incident[j],incident[k]],cross=b.n.clone().cross(c.n),det=a.n.dot(cross);if(Math.abs(det)<1e-8)continue;
@@ -63,7 +63,7 @@ export function compileTopologyBevelMotion(document,feature,polygons,ordered){
     if(min>.1)min+=1e-4;if(max<width.maximum)max-=1e-4;
     if(radius<min||radius>max||max-min<.01)return null;
     const movement=[],uvMovement=[],normalMotion=[];
-    for(const p of ordered){const u=(Math.abs(p.normal.z)<.8?new THREE.Vector3(0,0,1):new THREE.Vector3(0,1,0)).cross(p.normal).normalize(),v=p.normal.clone().cross(u);
+    for(const p of ordered){const u=(Math.abs(p.normal.z)<.8?new CAD.Vector3(0,0,1):new CAD.Vector3(0,1,0)).cross(p.normal).normalize(),v=p.normal.clone().cross(u);
         for(let i=1;i<p.vertices.length-1;i++){const triangle=[p.vertices[0],p.vertices[i],p.vertices[i+1]];if(triangle[1].clone().sub(triangle[0]).cross(triangle[2].clone().sub(triangle[0])).lengthSq()<1e-12)continue;for(const point of triangle){const speed=speeds.get(key(point));movement.push(...speed.toArray());uvMovement.push(speed.dot(u),speed.dot(v));normalMotion.push(NaN,0,0,0,0,0,0,0,0);}}
     }
     return {radius,min,max,movement:new Float32Array(movement),uvMovement:new Float32Array(uvMovement),normalMotion:new Float32Array(normalMotion),vertices,centers:polygons.map(()=>null)};

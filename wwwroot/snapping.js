@@ -1,6 +1,6 @@
 import {measure} from './cad-performance.js';
 // Snap only to geometric face boundaries; triangulation diagonals are removed.
-import * as THREE from './vendor/three.core.js';
+import * as CAD from './engine/core.js';
 const EPS=1e-4;
 const key=p=>`${Math.round(p.x/EPS)},${Math.round(p.y/EPS)}`;
 const cross=(a,b)=>a.x*b.y-a.y*b.x;
@@ -28,7 +28,7 @@ function vertexIndex(points){
 function boundaryGraph(polygons,frame){return measure('face-boundary',()=>buildBoundaryGraph(polygons,frame),{polygons:polygons.length});}
 function buildBoundaryGraph(polygons,frame) {
     const vertices=new Map(),segments=[];
-    const local=v=>{const d=v.clone().sub(frame.o);return new THREE.Vector2(d.dot(frame.u),d.dot(frame.v));};
+    const local=v=>{const d=v.clone().sub(frame.o);return new CAD.Vector2(d.dot(frame.u),d.dot(frame.v));};
     for(const polygon of polygons) {
         const points=polygon.vertices.map(local);
         for(let i=0;i<points.length;i++) {
@@ -88,7 +88,7 @@ export function faceSnapPoints(polygons,frame) {
         }
         const points=walk.map(id=>vertices.get(id));
         if(walk[0]===walk[walk.length-1]) {
-            const box=new THREE.Box2().setFromPoints(points);add(box.getCenter(new THREE.Vector2()),'center','轮廓中心');
+            const box=new CAD.Box2().setFromPoints(points);add(box.getCenter(new CAD.Vector2()),'center','轮廓中心');
         }
         // Follow each straight run between true vertices for its actual midpoint.
         const cornerIndices=walk.map((id,i)=>corners.has(id)?i:-1).filter(i=>i>=0);
@@ -98,7 +98,7 @@ export function faceSnapPoints(polygons,frame) {
             if(points.slice(from,to+1).every(p=>Math.abs(cross(d,p.clone().sub(a)))<=EPS*d.length()))add(a.clone().add(b).multiplyScalar(.5),'midpoint','边中点');
         }
     }
-    if(all.length)add(new THREE.Box2().setFromPoints(all).getCenter(new THREE.Vector2()),'center','面中心');
+    if(all.length)add(new CAD.Box2().setFromPoints(all).getCenter(new CAD.Vector2()),'center','面中心');
     return result;
 }
 export function closestScreenSnap(candidates,frame,camera,width,height,x,y,tolerance=14) {
@@ -108,9 +108,9 @@ export function closestScreenSnap(candidates,frame,camera,width,height,x,y,toler
         let local=candidate.point,reference=candidate.reference;
         if(candidate.segment){
             const [a,b]=candidate.segment,pa=project(a),pb=project(b);if(pa.depth<=0||pb.depth<=0)continue;
-            const sa=new THREE.Vector2((pa.screen.x+1)*width/2,(1-pa.screen.y)*height/2),sb=new THREE.Vector2((pb.screen.x+1)*width/2,(1-pb.screen.y)*height/2),delta=sb.clone().sub(sa),length=delta.lengthSq();
+            const sa=new CAD.Vector2((pa.screen.x+1)*width/2,(1-pa.screen.y)*height/2),sb=new CAD.Vector2((pb.screen.x+1)*width/2,(1-pb.screen.y)*height/2),delta=sb.clone().sub(sa),length=delta.lengthSq();
             if(length<1e-8)continue;
-            const t=Math.max(0,Math.min(1,new THREE.Vector2(x,y).sub(sa).dot(delta)/length)),ratio=camera.isOrthographicCamera?t:t*pa.depth/((1-t)*pb.depth+t*pa.depth);
+            const t=Math.max(0,Math.min(1,new CAD.Vector2(x,y).sub(sa).dot(delta)/length)),ratio=camera.isOrthographicCamera?t:t*pa.depth/((1-t)*pb.depth+t*pa.depth);
             local=a.clone().lerp(b,ratio);
             const [nx,ny]=candidate.normal,[start,end]=candidate.range;
             reference={...reference,parameter:Math.max(0,Math.min(1,(-ny*local.x+nx*local.y-start)/(end-start)))};
