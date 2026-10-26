@@ -1,6 +1,6 @@
-﻿// Convex polygon BSP boolean operations. Coordinates remain in model millimetres.
+// Convex polygon BSP boolean operations. Coordinates remain in model millimetres.
 // Face provenance survives splitting so a resulting planar face can host a sketch.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {recordBodyHistory,connectedBodies} from './solid-bodies.js';
 import {advancedFaces,chamferFaces,solidEdgeOptions,edgeTreatmentOptions,resolveChamferEdge,resolveSolidEdge,sweepGuideData} from './advanced-features.js';
 export {solidEdgeOptions,edgeTreatmentOptions,resolveSolidEdge};

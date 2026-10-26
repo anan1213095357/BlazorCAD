@@ -1,4 +1,4 @@
-﻿import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 const cache=new WeakMap();
 export function connectedBodies(polygons){
     if(cache.has(polygons))return cache.get(polygons);

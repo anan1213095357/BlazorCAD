@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 
 const near=(a,b)=>a.distanceToSquared(b)<1e-10;
 function intersect(a,ha,b,hb,c,hc){

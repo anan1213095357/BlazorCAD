@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 const v=()=>new THREE.Vector3();
 export function circleOf(edge){
     if(!edge.closed||edge.points.length<6)return null;

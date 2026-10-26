@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import * as THREE from '../wwwroot/vendor/three.module.js';
+import * as THREE from '../wwwroot/vendor/three.core.js';
 import {exportEdgeTools} from '../wwwroot/geometry.js';
 import {exportMeshOperations} from '../wwwroot/export-mesh-kernel.js';
 import {exportEdgeJunctions} from '../wwwroot/export-edge-junctions.js';

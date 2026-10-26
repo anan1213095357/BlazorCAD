@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {buildSolid,documentGeometry} from './geometry.js';
 import {referencedEdgeOptions,resolveChamferEdge} from './advanced-features.js';
 

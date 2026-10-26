@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {buildSolid} from './geometry.js';
 import {topologyBevelWidth} from './topology-bevel.js';
 import {resolveChamferEdge,chamferFaces} from './advanced-features.js';

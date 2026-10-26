@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 
 // Shares the rendered geometry and its displacement/clipping uniforms. No BSP,
 // edge catalogue, mesh extraction or geometry upload is needed while dragging.
@@ -13,6 +13,8 @@ export class DebugWireframe {
         for(const source of sources)for(const hidden of [true,false]){
             const materials=(Array.isArray(source.material)?source.material:[source.material]).map(original=>{
                 const material=original.clone(),compile=original.onBeforeCompile,cache=original.customProgramCacheKey.bind(original);
+                material.cadLive=original.cadLive;
+                material.cadSurface=original.cadSurface;
                 material.defaultAttributeValues={...original.defaultAttributeValues};
                 material.wireframe=true;material.side=THREE.DoubleSide;material.depthTest=true;material.depthWrite=false;
                 material.depthFunc=hidden?THREE.GreaterDepth:THREE.LessEqualDepth;

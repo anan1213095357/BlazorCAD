@@ -1,7 +1,7 @@
 // Compile an exact affine motion for a fixed straight-edge BSP topology.
 // Every supporting plane has a fixed normal and an affine offset in radius.
 // Vertex velocities follow the intersection of three independent planes.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {buildSolid} from './geometry.js';
 import {resolveChamferEdge,chamferFaces} from './advanced-features.js';
 import {topologyBevelWidth} from './topology-bevel.js';

@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 
 // The CPU geometry stays at the worker's seed radius. Dragging changes one
 // uniform; all mesh and debug passes share the same deformation attributes.
@@ -16,6 +16,7 @@ export function installEdgeMotionGpu(mesh,motion){
     };
     const materials=(Array.isArray(mesh.material)?mesh.material:[mesh.material]).map(source=>{
         const material=source.clone(),compile=source.onBeforeCompile,cache=source.customProgramCacheKey.bind(source);
+        material.cadLive=source.cadLive;material.cadSurface=source.cadSurface;
         material.defaultAttributeValues={...source.defaultAttributeValues};
         material.onBeforeCompile=(shader,...args)=>{compile.call(material,shader,...args);deform(shader);};
         material.customProgramCacheKey=()=>cache()+'/edge-motion-gpu-v1';owned.push(material);return material;
@@ -23,6 +24,6 @@ export function installEdgeMotionGpu(mesh,motion){
     mesh.material=Array.isArray(mesh.material)?materials:materials[0];
     const depth=new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking});depth.onBeforeCompile=deform;depth.customProgramCacheKey=()=>'/edge-motion-depth-v1';mesh.customDepthMaterial=depth;owned.push(depth);
     mesh.frustumCulled=false;
-    const session={set(value){delta.value=value-motion.radius;},dispose(){for(const material of owned)material.dispose();}};
+    const session={get delta(){return delta.value;},set(value){delta.value=value-motion.radius;},dispose(){for(const material of owned)material.dispose();}};
     mesh.userData.edgeMotionGpu=session;return session;
 }

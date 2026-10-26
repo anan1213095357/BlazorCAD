@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {buildSolid,featurePolygons,importSolidState,unpackExportEdges,exportEdgeTools,exportOperationTools} from './geometry.js';
 import {exportMeshOperations} from './export-mesh-kernel.js';
 import {visualEdgeDescendants} from './visual-edge-history.js';

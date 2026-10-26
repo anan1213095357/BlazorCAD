@@ -1,6 +1,6 @@
-﻿// Planar arrangement of analytic rectangle edges and circles. Intersections split
+// Planar arrangement of analytic rectangle edges and circles. Intersections split
 // half-edges; their left-hand cycles define atomic selectable sketch regions.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import { outline } from './sketch-tools.js';
 const TAU = Math.PI * 2, EPS = 1e-7, STEP = Math.PI / 64;
 const cross = (a,b) => a.x*b.y-a.y*b.x;

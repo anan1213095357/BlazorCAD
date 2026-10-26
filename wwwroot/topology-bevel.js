@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 // Preserve the requested size. Geometric validity is checked on the result;
 // neither neighbour width nor edge length silently changes the user's value.
 export function topologyBevelWidth(feature,edges){

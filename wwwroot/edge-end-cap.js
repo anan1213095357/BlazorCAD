@@ -1,4 +1,4 @@
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {bandEnd,sectionSample} from './edge-band-layout.js';
 
 // Fusing a boss to a base removes the base's internal top polygons. Bevelling

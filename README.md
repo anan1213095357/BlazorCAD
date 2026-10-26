@@ -2,6 +2,8 @@
 
 .NET 10 Blazor Web App，采用 Interactive Server（Blazor Server）。项目启动为空白。
 
+原生 WebGPU 迁移分支的入口已接入自写渲染器；CPU 几何和拾取仍使用 Three.js core，尚未完成全部替换。具体范围与未验证项见 [WEBGPU_MIGRATION.md](WEBGPU_MIGRATION.md)。
+
 ## 建模流程
 
 1. 已选中实体平面时，点击顶部“新建草图”直接在该面创建并自动正对一次。未选实体面时，点击“新建草图”才显示蓝色 XY、绿色 XZ、红色 YZ 网格面，选面后创建草图。选择树中的草图或图元不会被当作预选实体面。

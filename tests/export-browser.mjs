@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 const root=path.resolve('wwwroot'),project=JSON.parse(fs.readFileSync(process.argv[2],'utf8')).document;
 const server=http.createServer((request,response)=>{
- if(request.url==='/'){response.setHeader('Content-Type','text/html');response.end('<!doctype html><script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script><div id="cad-test" style="position:fixed;inset:0"></div>');return;}
+ if(request.url==='/'){response.setHeader('Content-Type','text/html');response.end('<!doctype html><script type="importmap">{"imports":{"three":"/vendor/three.core.js"}}</script><div id="cad-test" style="position:fixed;inset:0"></div>');return;}
  const filename=path.resolve(root,'.'+decodeURIComponent(request.url.split('?')[0]));
  if(!filename.startsWith(root+path.sep)||!fs.existsSync(filename)){response.writeHead(404).end();return;}
  response.setHeader('Content-Type',filename.endsWith('.wasm')?'application/wasm':filename.endsWith('.js')?'text/javascript':'application/octet-stream');fs.createReadStream(filename).pipe(response);
@@ -18,7 +18,7 @@ try{
  await page.goto(`http://127.0.0.1:${server.address().port}/`);
  await page.evaluate(async document=>{
   const cad=await import('/cad.js');window.cad=cad;window.exportEvents=[];
-  cad.init('cad-test',{invokeMethodAsync:async(name,...args)=>{if(name==='StlExportProgress')window.exportEvents.push(args);return null;}});
+  await cad.init('cad-test',{invokeMethodAsync:async(name,...args)=>{if(name==='StlExportProgress')window.exportEvents.push(args);return null;}});
   await cad.prepareLoadedDocument(document);
   cad.update(document,{operation:null,editingId:null,editingFeatureId:null,sketchId:null,profileId:null,regionKeys:[],tool:'select',featureMode:'extrude',distance:20,endCondition:'blind',featureDraft:{mode:'extrude',sections:[]}});
  },project);

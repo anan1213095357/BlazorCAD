@@ -21,7 +21,7 @@ import { readDraft, writeDraft, recordDiagnostic } from './cad-recovery.js';
 export { readDraft, writeDraft, recordDiagnostic };
 import * as THREE from 'three';
 import { CadControls } from './cad-controls.js';
-import { Reflector } from './vendor/Reflector.js';
+import {CadWebGPURenderer} from './webgpu/renderer.js';
 import { buildSolid, retainDocumentSolid, releaseDocumentSolid, importSolidState, featurePolygons, featureEndInfo, solidGeometry, profileShape, resolvePlane, world, documentGeometry, sketchGeometry, coplanarFaces, validateSupportPlanes, solidEdgeOptions, edgeTreatmentOptions, resolveSolidEdge, featureSweepGuide, loftFaceSection, featureDependsOnSketch } from './geometry.js';
 import { buildRegions, regionShape,insideLoop } from './regions.js';
 import { closestScreenSnap } from './snapping.js';
@@ -38,6 +38,7 @@ let renderer, scene, camera, controls, host, bridge, group, floor, shadowFloor, 
 let extendedSketch=null;
 let chamferEdges=[],chamferHover=null,axisEdges=[],axisHover=null;
 let lifecycleObserver=null,viewDisposed=true;
+let viewGeneration=0;
 let sweepGuide=null,sweepMoving=null,sweepPlaying=null,sweepProgress=0;
 window.addEventListener("pagehide",()=>dispose());
 let sketchCreationFocus=null;
@@ -57,16 +58,20 @@ let navigating=false,needsRender=true,pendingPointerMove=null,lastFrameTime=null
 function requestRender(){needsRender=true;}
 const ray = new THREE.Raycaster(), ink = 0xa2b9f4, accent = 0xc0ec88;
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
-export function init(id, callback) {if(!viewDisposed)dispose();viewDisposed=false;requestRender();
+export async function init(id, callback) {if(!viewDisposed)dispose();viewDisposed=false;requestRender();
+    const generation=++viewGeneration;
     host = document.getElementById(id); bridge = callback;
     debugWireframe=new DebugWireframe();debugWireframe.setEnabled(debugMode);
     host.tabIndex = 0;
     lifecycleObserver=new MutationObserver(()=>{if(host&&!host.isConnected)dispose();});
     lifecycleObserver.observe(document.body,{childList:true,subtree:true});
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });renderer.toneMapping=THREE.AgXToneMapping;renderer.toneMappingExposure=.9;renderer.outputColorSpace=THREE.SRGBColorSpace;
+    const target=host;
+    let created;
+    try{created=await CadWebGPURenderer.create({onError:error=>{recordDiagnostic('webgpu',error);bridge?.invokeMethodAsync('CanvasHint','WebGPU：'+error.message);}});}
+    catch(error){viewDisposed=true;lifecycleObserver?.disconnect();recordDiagnostic('webgpu-init',error);throw error;}
+    if(viewDisposed||host!==target||viewGeneration!==generation){created.dispose();return;}
+    renderer=created;
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); host.appendChild(renderer.domElement);
-    renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();recordDiagnostic('webgl-context-lost',event.statusMessage||'Graphics context lost');});
-    renderer.domElement.addEventListener('webglcontextrestored',()=>{requestRender();recordDiagnostic('webgl-context-restored','Graphics context restored');});
     snapElement=document.createElement('div');snapElement.className='snap-feedback';snapElement.setAttribute('aria-hidden','true');
     const marker=document.createElement('i'),text=document.createElement('span');snapElement.append(marker,text);snapElement.hidden=true;host.appendChild(snapElement);
     scene = new THREE.Scene();edgePreview=new EdgePreview(showEdgeRadiusPreview,(message,data)=>{edgeProfile?.error(message);if(data?.feature&&!data.feature.previewSegments)publishEdgePreview(data.feature,false,message);});edgeProfile=new EdgeProfile(value=>{if(liveFillet){try{liveFillet.set(value);previewInfo={valid:true,min:value,max:value,message:(liveFillet?.bevel?'D ':'R ')+value+' mm'};edgeProfile.error('');}catch(error){edgeProfile.error(error.message);}}else if(!applyFilletMotion(value))pendingEdgeRadius={value,key:edgeProfile.config?.key};requestRender();},commitEdgeRadius);surfaceStudio=new SurfaceStudio(renderer,scene,requestRender); scene.background = new THREE.Color(0x1b2430);
@@ -75,7 +80,7 @@ export function init(id, callback) {if(!viewDisposed)dispose();viewDisposed=fals
     const ambient=new THREE.HemisphereLight(0xe7edfa, 0x222935, .22);ambient.layers.enable(1);scene.add(ambient);
     keyLight = new THREE.DirectionalLight(0xfffaf3, 1.2); keyLight.position.set(-80, -100, 200); keyLight.castShadow=true;
     keyLight.layers.enable(1);keyLight.shadow.mapSize.set(2048,2048);keyLight.shadow.radius=3;keyLight.shadow.bias=-.0002; keyLight.shadow.normalBias=.03; scene.add(keyLight);scene.add(keyLight.target);
-    renderer.shadowMap.autoUpdate=false;renderer.shadowMap.needsUpdate=true;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+    renderer.shadowMap.enabled=false;
     createFloor();
     extendedSketch=new ExtendedSketch((entity,tool)=>bridge.invokeMethodAsync('AddSketchEntity',tool,entity),hint=>bridge.invokeMethodAsync('CanvasHint',hint));
     depthGizmo=new FeatureDepth(host,scene,camera,requestRender,previewFeatureDepth,commitFeatureDepth,
@@ -363,24 +368,12 @@ function hoverReferencePlane(reference) {
     for(const object of group.children)if(object.userData.planeColor) object.material.opacity=object.userData.pick.reference===reference ? .25 : .1;
 }
 function createFloor() {
-    const shader={
-        uniforms:{...THREE.UniformsUtils.clone(Reflector.ReflectorShader.uniforms),radius:{value:1000}},
-        vertexShader:`uniform mat4 textureMatrix; varying vec4 vUv; varying vec2 vFloor;
-            void main(){vFloor=position.xy;vUv=textureMatrix*vec4(position,1.0);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader:`uniform vec3 color;uniform sampler2D tDiffuse;uniform float radius;varying vec4 vUv;varying vec2 vFloor;
-            void main(){vec2 uv=vUv.xy/vUv.w;vec2 d=vec2(0.0012);vec3 r=texture2D(tDiffuse,uv).rgb*0.4;
-                r+=(texture2D(tDiffuse,uv+vec2(d.x,0.0)).rgb+texture2D(tDiffuse,uv-vec2(d.x,0.0)).rgb+texture2D(tDiffuse,uv+vec2(0.0,d.y)).rgb+texture2D(tDiffuse,uv-vec2(0.0,d.y)).rgb)*0.15;
-                float fade=1.0-smoothstep(radius*0.4,radius,length(vFloor));gl_FragColor=vec4(mix(color,r,0.23*fade),fade*0.94);
-                #include <tonemapping_fragment>
-                #include <colorspace_fragment>
-            }`
-    };
-    floor=new Reflector(new THREE.PlaneGeometry(20000,20000),{color:0x263242,textureWidth:1024,textureHeight:1024,clipBias:.003,shader,multisample:0});
-    floor.camera.layers.set(1);
-    floor.material.transparent=true;floor.material.depthWrite=false;floor.position.z=-8;scene.add(floor);
-    shadowFloor=new THREE.Mesh(new THREE.PlaneGeometry(20000,20000),new THREE.ShadowMaterial({color:0x03070d,opacity:.42,depthWrite:false}));
-    shadowFloor.position.z=-7.98;shadowFloor.receiveShadow=true;scene.add(shadowFloor);
+    // The stage is native geometry. No offscreen WebGL Reflector pass.
+    floor=new THREE.Mesh(new THREE.PlaneGeometry(20000,20000),new THREE.MeshBasicMaterial({color:0x263242,transparent:true,opacity:.35,depthWrite:false,side:THREE.DoubleSide}));
+    floor.material.uniforms={radius:{value:1000}};floor.position.z=-8;scene.add(floor);
+    shadowFloor=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));shadowFloor.visible=false;scene.add(shadowFloor);
 }
+
 function updateFloor() {
     const box=new THREE.Box3();for(const p of solid)for(const v of p.vertices)box.expandByPoint(v);
     const center=box.isEmpty()?V():box.getCenter(V()),size=box.isEmpty()?V(100,100,100):box.getSize(V());

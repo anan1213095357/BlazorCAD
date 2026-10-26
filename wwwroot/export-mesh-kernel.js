@@ -1,5 +1,5 @@
 import Module from './vendor/manifold.js';
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {closeExportSolid} from './geometry.js';
 let loaded;
 async function kernel(){

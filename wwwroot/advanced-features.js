@@ -1,7 +1,7 @@
 import {circleOf} from './curved-boundary.js';
 import {roundEnd} from './round-junction.js';
 // Section-based solid generation. Returned faces are passed through the existing BSP kernel.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 import {outline} from './sketch-tools.js';
 import {faceBoundarySegments} from './snapping.js';
 const EPS=1e-5;

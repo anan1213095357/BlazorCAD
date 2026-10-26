@@ -13,7 +13,7 @@ import {rimBevelProfiles} from './rim-bevel-profile.js';
 // without eroding neighbouring faces with a screen-space clipping tolerance.
 // Display-only fillet: original surface fragments are clipped analytically and
 // the replacement arc strips are displaced by one radius uniform. No BSP per drag.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 const v=()=>new THREE.Vector3();
 const clipShader=`
 uniform highp sampler2D liveCuts;
@@ -261,6 +261,8 @@ export class LiveFillet {
     }
     material(source,skip,patch,skipEnd=skip+1,fixedRadius=-1,closure=false,joined=[]){
         const material=source.clone(),previous=source.onBeforeCompile,cache=source.customProgramCacheKey.bind(source);
+        material.cadLive={owner:this,skip,skipEnd,patch,fixedRadius,closure,joined};
+        material.cadSurface=source.cadSurface;
         if(patch)material.defines={...material.defines,CAD_LIVE_PATCH:1};
         material.onBeforeCompile=(shader,...args)=>{
             previous.call(material,shader,...args);Object.assign(shader.uniforms,{liveCuts:{value:this.texture},liveRoundCuts:{value:this.roundTexture},liveCount:{value:this.records.length},liveSkip:{value:skip},liveSkipEnd:{value:skipEnd},liveRadius:this.radius,livePatchRadius:fixedRadius<0?this.radius:{value:fixedRadius},liveBevel:{value:this.bevel?1:0},liveRatio:{value:this.ratio}});

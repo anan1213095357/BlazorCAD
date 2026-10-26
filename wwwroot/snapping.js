@@ -1,6 +1,6 @@
 import {measure} from './cad-performance.js';
 // Snap only to geometric face boundaries; triangulation diagonals are removed.
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.core.js';
 const EPS=1e-4;
 const key=p=>`${Math.round(p.x/EPS)},${Math.round(p.y/EPS)}`;
 const cross=(a,b)=>a.x*b.y-a.y*b.x;

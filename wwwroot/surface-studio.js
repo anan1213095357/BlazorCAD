@@ -2,6 +2,7 @@ import * as THREE from 'three';
 export class SurfaceStudio {
     constructor(renderer,scene,redraw){Object.assign(this,{renderer,scene,redraw});this.environmentKey=null;this.environmentTarget=null;this.materials=new Map();}
     environment(kind='studio'){
+        if(this.renderer.isNativeWebGPU){this.environmentKey=kind;this.renderer.environment=kind;this.scene.environment=null;this.redraw();return;}
         if(this.environmentKey===kind)return;this.environmentKey=kind;this.scene.environment=null;this.environmentTarget?.dispose();this.environmentTarget=null;
         if(kind==='none')return;
         // Linear half-float radiance: keep softboxes brighter than white so
@@ -31,6 +32,7 @@ export class SurfaceStudio {
         const preset=settings.preset??'steel',metal=['steel','aluminum','copper','brass'].includes(preset),grain=settings.grain??(metal ? .18 : .12),anisotropy=settings.anisotropy??(preset==='steel' ? .55 : preset==='aluminum' ? .3 : 0),angle=(settings.brushAngle??0)*Math.PI/180;
         const material=new THREE.MeshPhysicalMaterial({color:settings.color??'#b8bdc3',metalness:settings.metalness??.98,roughness:settings.roughness??.24,clearcoat:settings.clearcoat??.02,clearcoatRoughness:.16,specularIntensity:settings.specular??1,envMapIntensity:(settings.environmentStrength??1)*(.1+.85*(settings.specular??1)),anisotropy:metal?anisotropy:0,anisotropyRotation:angle,transparent:false,opacity:1,depthWrite:true});
         const aspect={value:1};
+        material.cadSurface={...settings};
         if(settings.textureId){
             const loader=new THREE.TextureLoader(),texture=loader.load('/cad-textures/'+settings.textureId,loaded=>{aspect.value=Math.max(.001,loaded.image.width/loaded.image.height);material.needsUpdate=true;this.redraw();},undefined,()=>{material.userData.textureError=true;this.redraw();});texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.anisotropy=this.renderer.capabilities.getMaxAnisotropy();material.map=texture;
         }
